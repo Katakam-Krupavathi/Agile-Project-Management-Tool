@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { FolderKanban, LogOut } from 'lucide-react';
 import { Avatar, HealthPulse, type ProjectHealth } from '../ui';
+import { NotificationsBell } from './NotificationsBell';
 
 export interface SidebarProject {
   id: string;
@@ -128,6 +129,7 @@ export function AppShell({
           <div className="flex items-center gap-3">
             {viewToggle}
             {headerActions}
+            <NotificationsBell />
           </div>
         </header>
 

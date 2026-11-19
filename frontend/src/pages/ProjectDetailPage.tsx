@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Kanban, ListTree } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
@@ -53,6 +53,20 @@ export function ProjectDetailPage() {
     assigneeId: '',
     query: '',
   });
+
+  useEffect(() => {
+    if (!tree) return;
+    const storyParam = searchParams.get('story');
+    const taskParam = searchParams.get('task');
+    if (storyParam && tree.stories.some((n) => n.story.id === storyParam)) {
+      setSelectedStoryId(storyParam);
+    } else if (taskParam) {
+      const parent = tree.stories.find((n) => n.tasks.some((t) => t.id === taskParam));
+      if (parent) {
+        setSelectedStoryId(parent.story.id);
+      }
+    }
+  }, [tree, searchParams]);
 
   const filteredStories = useMemo(() => {
     if (!tree) return [];
