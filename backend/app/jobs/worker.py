@@ -1,10 +1,12 @@
 import json
 import logging
 import os
+import random
 import signal
 import socket
 import threading
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -17,6 +19,20 @@ from app.models.job import Job
 from app.models.user import utc_now
 
 logger = logging.getLogger("app.jobs.worker")
+
+BASE_BACKOFF_SECONDS: float = 10.0
+BACKOFF_FACTOR: float = 4.0
+JITTER_RATIO: float = 0.1
+
+
+def compute_backoff_seconds(
+    attempt: int,
+    rng: Callable[[], float] | None = None,
+) -> float:
+    """Compute exponential backoff (10s, 40s, 160s, ...) plus bounded jitter."""
+    base = BASE_BACKOFF_SECONDS * (BACKOFF_FACTOR ** max(attempt - 1, 0))
+    jitter_fn = rng or random.random
+    return base + (base * JITTER_RATIO * jitter_fn())
 
 
 def _log_event(level: int, event: str, **fields: Any) -> None:
@@ -78,34 +94,82 @@ def claim_next_job(
     return job
 
 
+def _handle_job_failure(
+    db: Session,
+    job_id: str,
+    *,
+    error_msg: str,
+    worker_id: str,
+    now: datetime,
+    rng: Callable[[], float] | None = None,
+    force_dead: bool = False,
+) -> Job | None:
+    failed_job = db.scalar(select(Job).where(Job.id == job_id))
+    if failed_job is None:
+        return None
+
+    failed_job.last_error = error_msg[:2000]
+    failed_job.locked_by = None
+    failed_job.locked_at = None
+    failed_job.updated_at = now
+
+    if force_dead or failed_job.attempts >= failed_job.max_attempts:
+        failed_job.status = JobStatus.DEAD.value
+        db.commit()
+        _log_event(
+            logging.ERROR,
+            "job.dead",
+            job_id=failed_job.id,
+            job_type=failed_job.job_type,
+            worker_id=worker_id,
+            attempts=failed_job.attempts,
+            max_attempts=failed_job.max_attempts,
+            error=failed_job.last_error,
+        )
+    else:
+        delay_seconds = compute_backoff_seconds(failed_job.attempts, rng=rng)
+        failed_job.status = JobStatus.QUEUED.value
+        failed_job.run_at = now + timedelta(seconds=delay_seconds)
+        db.commit()
+        _log_event(
+            logging.WARNING,
+            "job.retry_scheduled",
+            job_id=failed_job.id,
+            job_type=failed_job.job_type,
+            worker_id=worker_id,
+            attempts=failed_job.attempts,
+            max_attempts=failed_job.max_attempts,
+            retry_in_seconds=round(delay_seconds, 2),
+            next_run_at=failed_job.run_at.isoformat(),
+            error=failed_job.last_error,
+        )
+    return failed_job
+
+
 def process_next_job(
     db: Session,
     worker_id: str,
     *,
     now: datetime | None = None,
+    rng: Callable[[], float] | None = None,
 ) -> Job | None:
-    job = claim_next_job(db, worker_id, now=now)
+    reference_now = now or utc_now()
+    job = claim_next_job(db, worker_id, now=reference_now)
     if job is None:
         return None
 
     handler = get_handler(job.job_type)
     if handler is None:
         error_msg = f"No handler registered for job_type '{job.job_type}'."
-        job.status = JobStatus.FAILED.value
-        job.last_error = error_msg
-        job.locked_by = None
-        job.locked_at = None
-        job.updated_at = now or utc_now()
-        db.commit()
-        _log_event(
-            logging.ERROR,
-            "job.handler_missing",
-            job_id=job.id,
-            job_type=job.job_type,
+        return _handle_job_failure(
+            db,
+            job.id,
+            error_msg=error_msg,
             worker_id=worker_id,
-            error=error_msg,
+            now=reference_now,
+            rng=rng,
+            force_dead=True,
         )
-        return job
 
     payload = json.loads(job.payload) if job.payload else {}
     try:
@@ -127,28 +191,17 @@ def process_next_job(
             worker_id=worker_id,
             attempts=job.attempts,
         )
+        return job
     except Exception as exc:
         db.rollback()
-        failed_job = db.scalar(select(Job).where(Job.id == job.id))
-        if failed_job is not None:
-            failed_job.status = JobStatus.FAILED.value
-            failed_job.last_error = f"{type(exc).__name__}: {exc}"[:2000]
-            failed_job.locked_by = None
-            failed_job.locked_at = None
-            failed_job.updated_at = now or utc_now()
-            db.commit()
-            job = failed_job
-        _log_event(
-            logging.ERROR,
-            "job.failed",
-            job_id=job.id,
-            job_type=job.job_type,
+        return _handle_job_failure(
+            db,
+            job.id,
+            error_msg=f"{type(exc).__name__}: {exc}",
             worker_id=worker_id,
-            attempts=job.attempts,
-            error=f"{type(exc).__name__}: {exc}",
+            now=now or utc_now(),
+            rng=rng,
         )
-
-    return job
 
 
 class Worker:
