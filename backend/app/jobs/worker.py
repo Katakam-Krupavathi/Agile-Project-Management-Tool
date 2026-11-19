@@ -23,6 +23,7 @@ logger = logging.getLogger("app.jobs.worker")
 BASE_BACKOFF_SECONDS: float = 10.0
 BACKOFF_FACTOR: float = 4.0
 JITTER_RATIO: float = 0.1
+DEFAULT_LOCK_TIMEOUT_SECONDS: int = 300
 
 
 def compute_backoff_seconds(
@@ -204,6 +205,57 @@ def process_next_job(
         )
 
 
+def recover_stuck_jobs(
+    db: Session,
+    *,
+    lock_timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS,
+    now: datetime | None = None,
+) -> int:
+    """Recover jobs stuck in 'running' past ``lock_timeout_seconds``."""
+    reference_now = now or utc_now()
+    cutoff = reference_now - timedelta(seconds=lock_timeout_seconds)
+
+    stuck_jobs = list(
+        db.scalars(
+            select(Job).where(
+                Job.status == JobStatus.RUNNING.value,
+                Job.locked_at.is_not(None),
+                Job.locked_at < cutoff,
+            )
+        ).all()
+    )
+    if not stuck_jobs:
+        return 0
+
+    for job in stuck_jobs:
+        previous_owner = job.locked_by
+        job.locked_by = None
+        job.locked_at = None
+        job.updated_at = reference_now
+        if job.attempts >= job.max_attempts:
+            job.status = JobStatus.DEAD.value
+            job.last_error = "Job lock timed out after reaching max_attempts."
+            event_name = "job.stuck_marked_dead"
+        else:
+            job.status = JobStatus.QUEUED.value
+            job.run_at = reference_now
+            job.last_error = "Recovered from stale worker lock."
+            event_name = "job.stuck_recovered"
+
+        _log_event(
+            logging.WARNING,
+            event_name,
+            job_id=job.id,
+            job_type=job.job_type,
+            previous_worker_id=previous_owner,
+            attempts=job.attempts,
+            max_attempts=job.max_attempts,
+        )
+
+    db.commit()
+    return len(stuck_jobs)
+
+
 class Worker:
     def __init__(
         self,
@@ -211,14 +263,20 @@ class Worker:
         *,
         worker_id: str | None = None,
         poll_interval_seconds: float = 1.0,
+        lock_timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS,
     ) -> None:
         self.session_factory = session_factory
         self.worker_id = worker_id or default_worker_id()
         self.poll_interval_seconds = poll_interval_seconds
+        self.lock_timeout_seconds = lock_timeout_seconds
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def recover_once(self) -> int:
+        with self.session_factory() as db:
+            return recover_stuck_jobs(db, lock_timeout_seconds=self.lock_timeout_seconds)
 
     def run_once(self) -> Job | None:
         with self.session_factory() as db:
@@ -227,6 +285,7 @@ class Worker:
     def run_forever(self) -> None:
         _log_event(logging.INFO, "worker.started", worker_id=self.worker_id)
         while not self._stop_event.is_set():
+            self.recover_once()
             processed = self.run_once()
             if processed is None:
                 self._stop_event.wait(self.poll_interval_seconds)
