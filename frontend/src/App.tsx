@@ -1,11 +1,13 @@
 import { useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { GuestOnly } from './components/auth/RouteGuards';
+import { GuestOnly, RequireAuth } from './components/auth/RouteGuards';
 import { ToastProvider, useToast } from './components/ui';
 import { AUTH_ME_KEY } from './hooks/useAuth';
 import { setUnauthorizedHandler } from './lib/api';
 import { LoginPage } from './pages/LoginPage';
+import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { RegisterPage } from './pages/RegisterPage';
 
 const queryClient = new QueryClient({
@@ -57,7 +59,24 @@ export default function App() {
                 </GuestOnly>
               }
             />
-            <Route path="*" element={<Navigate to="/login" replace />} />
+            <Route
+              path="/projects"
+              element={
+                <RequireAuth>
+                  <ProjectsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/projects/:projectId"
+              element={
+                <RequireAuth>
+                  <ProjectDetailPage />
+                </RequireAuth>
+              }
+            />
+            <Route path="/" element={<Navigate to="/projects" replace />} />
+            <Route path="*" element={<Navigate to="/projects" replace />} />
           </Routes>
         </BrowserRouter>
       </ToastProvider>
