@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -5,7 +6,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+logger = logging.getLogger(__name__)
+
 PROBLEM_BASE_URI = "https://agile-pm.local/errors"
+HTTP_422_STATUS = getattr(
+    status, "HTTP_422_UNPROCESSABLE_CONTENT", status.HTTP_422_UNPROCESSABLE_ENTITY
+)
 
 
 class AppError(Exception):
@@ -124,8 +130,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             for err in exc.errors()
         ]
         return problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            title="Unprocessable Entity",
+            status_code=HTTP_422_STATUS,
+            title="Unprocessable Content",
             detail="Request validation failed.",
             instance=str(request.url.path),
             error_slug="validation-error",
@@ -145,4 +151,16 @@ def register_exception_handlers(app: FastAPI) -> None:
             error_slug=f"http-{exc.status_code}",
             code=f"HTTP_{exc.status_code}",
             headers=dict(exc.headers) if exc.headers else None,
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return problem_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            title="Internal Server Error",
+            detail="An unexpected error occurred.",
+            instance=str(request.url.path),
+            error_slug="internal-server-error",
+            code="INTERNAL_SERVER_ERROR",
         )
