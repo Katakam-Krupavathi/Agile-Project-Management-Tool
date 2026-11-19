@@ -1,0 +1,62 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: production
+      DATABASE_URL: sqlite:////data/agile_pm.db
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-to-a-long-random-string}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SEED_DEMO: ${SEED_DEMO:-true}
+    volumes:
+      - sqlite_data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.jobs.worker"]
+    environment:
+      APP_ENV: production
+      DATABASE_URL: sqlite:////data/agile_pm.db
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-to-a-long-random-string}
+      SEED_DEMO: "false"
+    volumes:
+      - sqlite_data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/data/agile_pm.db'); conn.execute('SELECT 1 FROM jobs LIMIT 1'); conn.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  sqlite_data:
