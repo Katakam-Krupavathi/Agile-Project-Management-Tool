@@ -1,6 +1,9 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { ToastProvider } from './components/ui';
+import { useEffect } from 'react';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { ToastProvider, useToast } from './components/ui';
+import { AUTH_ME_KEY } from './hooks/useAuth';
+import { setUnauthorizedHandler } from './lib/api';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -11,11 +14,29 @@ const queryClient = new QueryClient({
   },
 });
 
+function AuthRedirectBridge() {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const { pushToast } = useToast();
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      qc.setQueryData(AUTH_ME_KEY, null);
+      pushToast('Your session expired. Please sign in again.', 'error');
+      navigate('/login', { replace: true });
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [navigate, qc, pushToast]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <BrowserRouter>
+          <AuthRedirectBridge />
           <Routes>
             <Route
               path="/"
