@@ -6,6 +6,7 @@ import { ToastProvider, useToast } from './components/ui';
 import { AUTH_ME_KEY } from './hooks/useAuth';
 import { setUnauthorizedHandler } from './lib/api';
 import { LoginPage } from './pages/LoginPage';
+import { ProjectActivityPage } from './pages/ProjectActivityPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -72,6 +73,14 @@ export default function App() {
               element={
                 <RequireAuth>
                   <ProjectDetailPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/projects/:projectId/activity"
+              element={
+                <RequireAuth>
+                  <ProjectActivityPage />
                 </RequireAuth>
               }
             />

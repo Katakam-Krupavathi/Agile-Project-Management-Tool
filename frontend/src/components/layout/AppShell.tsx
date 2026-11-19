@@ -16,9 +16,16 @@ export interface SidebarUser {
   email: string;
 }
 
+export interface ProjectNavItem {
+  to: string;
+  label: string;
+  end?: boolean;
+}
+
 export interface AppShellProps {
   user: SidebarUser;
   projects: SidebarProject[];
+  projectNav?: ProjectNavItem[];
   onLogout: () => void;
   loggingOut?: boolean;
   title: string;
@@ -31,6 +38,7 @@ export interface AppShellProps {
 export function AppShell({
   user,
   projects,
+  projectNav,
   onLogout,
   loggingOut = false,
   title,
@@ -67,6 +75,34 @@ export function AppShell({
             <FolderKanban className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>Projects</span>
           </NavLink>
+
+          {projectNav && projectNav.length > 0 && (
+            <div className="mt-6">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-brand-200">
+                Project
+              </p>
+              <ul className="mt-2 space-y-1">
+                {projectNav.map((item) => (
+                  <li key={item.to}>
+                    <NavLink
+                      to={item.to}
+                      end={item.end}
+                      className={({ isActive }) =>
+                        [
+                          'block rounded px-3 py-1.5 text-sm transition-colors',
+                          isActive
+                            ? 'bg-brand-600 font-medium text-neutral-0'
+                            : 'text-brand-100 hover:bg-brand-600/70 hover:text-neutral-0',
+                        ].join(' ')
+                      }
+                    >
+                      {item.label}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {projects.length > 0 && (
             <div className="mt-6">

@@ -195,8 +195,11 @@ export const projectsApi = {
   removeMember: (projectId: string, userId: string) =>
     apiRequest<void>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
 
-  activity: (projectId: string, limit = 30) =>
-    apiRequest<CursorPage<ActivityLog>>(`/projects/${projectId}/activity?limit=${limit}`),
+  activity: (projectId: string, limit = 30, cursor?: string | null) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    return apiRequest<CursorPage<ActivityLog>>(`/projects/${projectId}/activity?${params}`);
+  },
 };
 
 export const storiesApi = {
