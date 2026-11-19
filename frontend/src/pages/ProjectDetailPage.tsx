@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Kanban, ListTree } from 'lucide-react';
-import { AppShell, type ProjectNavItem } from '../components/layout/AppShell';
+import { AppShell } from '../components/layout/AppShell';
+import { buildProjectNav } from '../components/layout/projectNav';
 import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
 import { BoardView } from '../components/workspace/BoardView';
 import { OutlineView } from '../components/workspace/OutlineView';
@@ -160,18 +161,11 @@ export function ProjectDetailPage() {
     </div>
   );
 
-  const projectNav: ProjectNavItem[] = projectId
-    ? [
-        { to: `/projects/${projectId}`, label: 'Workspace', end: true },
-        { to: `/projects/${projectId}/activity`, label: 'Activity' },
-      ]
-    : [];
-
   return (
     <AppShell
       user={user}
       projects={projects}
-      projectNav={projectNav}
+      projectNav={buildProjectNav(projectId)}
       onLogout={handleLogout}
       loggingOut={logout.isPending}
       title={tree ? `${tree.project.key} · ${tree.project.name}` : 'Project'}

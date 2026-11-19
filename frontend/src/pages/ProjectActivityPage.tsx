@@ -1,7 +1,8 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Activity } from 'lucide-react';
-import { AppShell, type ProjectNavItem } from '../components/layout/AppShell';
+import { AppShell } from '../components/layout/AppShell';
+import { buildProjectNav } from '../components/layout/projectNav';
 import { Avatar, Badge, Button, EmptyState, ErrorState, Skeleton } from '../components/ui';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
@@ -93,13 +94,6 @@ export function ProjectActivityPage() {
   const projects = projectsPage?.items ?? [];
   const entries = activityQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
-  const projectNav: ProjectNavItem[] = projectId
-    ? [
-        { to: `/projects/${projectId}`, label: 'Workspace', end: true },
-        { to: `/projects/${projectId}/activity`, label: 'Activity' },
-      ]
-    : [];
-
   const handleLogout = async () => {
     await logout.mutateAsync();
     navigate('/login', { replace: true });
@@ -109,7 +103,7 @@ export function ProjectActivityPage() {
     <AppShell
       user={user}
       projects={projects}
-      projectNav={projectNav}
+      projectNav={buildProjectNav(projectId)}
       onLogout={handleLogout}
       loggingOut={logout.isPending}
       title={tree ? `${tree.project.key} · Activity` : 'Project Activity'}
