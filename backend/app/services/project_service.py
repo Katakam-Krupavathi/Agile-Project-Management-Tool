@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
 from app.models.activity import ActivityLog
 from app.models.enums import ActivityEntityType, ProjectRole
@@ -125,25 +125,6 @@ def create_project(
     return to_project_response(project, ProjectRole.OWNER)
 
 
-def get_project_for_user(
-    db: Session,
-    project_id: str,
-    user_id: str,
-) -> tuple[Project, ProjectRole]:
-    row = db.execute(
-        select(Project, ProjectMember.role)
-        .join(ProjectMember, ProjectMember.project_id == Project.id)
-        .where(
-            Project.id == project_id,
-            Project.deleted_at.is_(None),
-            ProjectMember.user_id == user_id,
-        )
-    ).first()
-    if row is None:
-        raise NotFoundError("Project not found.", code="PROJECT_NOT_FOUND")
-    return row[0], ProjectRole(row[1])
-
-
 def update_project(
     db: Session,
     project: Project,
@@ -151,9 +132,6 @@ def update_project(
     payload: ProjectUpdateRequest,
     actor_id: str,
 ) -> ProjectResponse:
-    if role != ProjectRole.OWNER:
-        raise ForbiddenError("Insufficient project permissions.", code="INSUFFICIENT_ROLE")
-
     if project.version != payload.version:
         raise ConflictError(
             "Project has been modified by another request. Reload and retry.",
@@ -187,12 +165,8 @@ def update_project(
 def archive_project(
     db: Session,
     project: Project,
-    role: ProjectRole,
     actor_id: str,
 ) -> None:
-    if role != ProjectRole.OWNER:
-        raise ForbiddenError("Insufficient project permissions.", code="INSUFFICIENT_ROLE")
-
     project.deleted_at = utc_now()
     project.version += 1
     db.add(

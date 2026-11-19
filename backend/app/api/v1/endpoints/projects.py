@@ -5,10 +5,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_csrf
 from app.db.session import get_db
+from app.models.enums import ProjectRole
 from app.models.user import User
 from app.schemas.common import CursorPage
 from app.schemas.project import ProjectCreateRequest, ProjectResponse, ProjectUpdateRequest
 from app.services import project_service
+from app.services.permissions import ProjectAccess, require_project_role
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -45,12 +47,9 @@ def create_project(
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(
-    project_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.VIEWER))],
 ) -> ProjectResponse:
-    project, role = project_service.get_project_for_user(db, project_id, current_user.id)
-    return project_service.to_project_response(project, role)
+    return project_service.to_project_response(access.project, access.role)
 
 
 @router.patch(
@@ -59,13 +58,11 @@ def get_project(
     dependencies=[Depends(require_csrf)],
 )
 def update_project(
-    project_id: str,
     payload: ProjectUpdateRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.OWNER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ProjectResponse:
-    project, role = project_service.get_project_for_user(db, project_id, current_user.id)
-    return project_service.update_project(db, project, role, payload, current_user.id)
+    return project_service.update_project(db, access.project, access.role, payload, access.user.id)
 
 
 @router.delete(
@@ -74,9 +71,7 @@ def update_project(
     dependencies=[Depends(require_csrf)],
 )
 def archive_project(
-    project_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.OWNER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    project, role = project_service.get_project_for_user(db, project_id, current_user.id)
-    project_service.archive_project(db, project, role, current_user.id)
+    project_service.archive_project(db, access.project, access.user.id)
