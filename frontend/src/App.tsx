@@ -8,6 +8,7 @@ import { setUnauthorizedHandler } from './lib/api';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectActivityPage } from './pages/ProjectActivityPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { ProjectReportsPage } from './pages/ProjectReportsPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -90,6 +91,14 @@ export default function App() {
               element={
                 <RequireAuth>
                   <ProjectReportsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/projects/:projectId/members"
+              element={
+                <RequireAuth>
+                  <ProjectMembersPage />
                 </RequireAuth>
               }
             />

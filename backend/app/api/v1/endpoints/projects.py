@@ -13,6 +13,7 @@ from app.schemas.project import (
     ProjectCreateRequest,
     ProjectMemberCreateRequest,
     ProjectMemberResponse,
+    ProjectMemberUpdateRequest,
     ProjectResponse,
     ProjectUpdateRequest,
 )
@@ -151,3 +152,23 @@ def list_project_activity(
         limit=limit,
     )
     return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)
+
+
+@router.patch(
+    "/{project_id}/members/{user_id}",
+    response_model=ProjectMemberResponse,
+    dependencies=[Depends(require_csrf)],
+)
+def update_member_role(
+    user_id: str,
+    payload: ProjectMemberUpdateRequest,
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.OWNER))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProjectMemberResponse:
+    return project_service.update_project_member_role(
+        db,
+        access.project,
+        user_id,
+        payload,
+        access.user.id,
+    )

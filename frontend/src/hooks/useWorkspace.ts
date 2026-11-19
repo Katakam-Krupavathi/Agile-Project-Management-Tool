@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiError, projectsApi, storiesApi, tasksApi } from '../lib/api';
-import type { ProjectTree, StoryPriority, StoryStatus, TaskStatus } from '../lib/types';
+import type { ProjectRole, ProjectTree, StoryPriority, StoryStatus, TaskStatus } from '../lib/types';
 import { useToast, type ToastAction, type ToastTone } from '../components/ui';
 import { projectTreeKey } from './useProjects';
 
@@ -282,6 +282,61 @@ export function useDeleteTask(projectId: string) {
     },
     onError: (err) => {
       pushToast(err instanceof ApiError ? err.detail : 'Failed to delete task.', 'error');
+    },
+  });
+}
+
+
+export function useAddProjectMember(projectId: string) {
+  const queryClient = useQueryClient();
+  const { pushToast } = useToast();
+
+  return useMutation({
+    mutationFn: (payload: { email: string; role: ProjectRole }) =>
+      projectsApi.addMember(projectId, payload),
+    onSuccess: (member) => {
+      queryClient.invalidateQueries({ queryKey: projectMembersKey(projectId) });
+      queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
+      pushToast(`Added ${member.name} as ${member.role}.`, 'success');
+    },
+    onError: (err) => {
+      pushToast(err instanceof ApiError ? err.detail : 'Failed to add member.', 'error');
+    },
+  });
+}
+
+export function useUpdateProjectMemberRole(projectId: string) {
+  const queryClient = useQueryClient();
+  const { pushToast } = useToast();
+
+  return useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: ProjectRole }) =>
+      projectsApi.updateMemberRole(projectId, userId, role),
+    onSuccess: (member) => {
+      queryClient.invalidateQueries({ queryKey: projectMembersKey(projectId) });
+      queryClient.invalidateQueries({ queryKey: projectTreeKey(projectId) });
+      queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
+      pushToast(`Updated ${member.name} to ${member.role}.`, 'success');
+    },
+    onError: (err) => {
+      pushToast(err instanceof ApiError ? err.detail : 'Failed to update member role.', 'error');
+    },
+  });
+}
+
+export function useRemoveProjectMember(projectId: string) {
+  const queryClient = useQueryClient();
+  const { pushToast } = useToast();
+
+  return useMutation({
+    mutationFn: (userId: string) => projectsApi.removeMember(projectId, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: projectMembersKey(projectId) });
+      queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
+      pushToast('Member removed from project.', 'info');
+    },
+    onError: (err) => {
+      pushToast(err instanceof ApiError ? err.detail : 'Failed to remove member.', 'error');
     },
   });
 }

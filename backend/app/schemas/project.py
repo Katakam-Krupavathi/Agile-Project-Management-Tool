@@ -77,3 +77,7 @@ class ProjectMemberResponse(BaseModel):
     name: str
     role: ProjectRole
     created_at: datetime
+
+
+class ProjectMemberUpdateRequest(BaseModel):
+    role: ProjectRole

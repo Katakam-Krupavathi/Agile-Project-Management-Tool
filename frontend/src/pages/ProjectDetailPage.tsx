@@ -165,7 +165,7 @@ export function ProjectDetailPage() {
     <AppShell
       user={user}
       projects={projects}
-      projectNav={buildProjectNav(projectId)}
+      projectNav={buildProjectNav(projectId, tree?.project.role)}
       onLogout={handleLogout}
       loggingOut={logout.isPending}
       title={tree ? `${tree.project.key} · ${tree.project.name}` : 'Project'}

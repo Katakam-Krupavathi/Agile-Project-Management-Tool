@@ -14,6 +14,7 @@ from app.schemas.project import (
     ProjectCreateRequest,
     ProjectMemberCreateRequest,
     ProjectMemberResponse,
+    ProjectMemberUpdateRequest,
     ProjectResponse,
     ProjectUpdateRequest,
 )
@@ -341,3 +342,54 @@ def remove_project_member(
         )
     )
     db.commit()
+
+
+def update_project_member_role(
+    db: Session,
+    project: Project,
+    target_user_id: str,
+    payload: ProjectMemberUpdateRequest,
+    actor_id: str,
+) -> ProjectMemberResponse:
+    row = db.execute(
+        select(ProjectMember, User)
+        .join(User, User.id == ProjectMember.user_id)
+        .where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.user_id == target_user_id,
+        )
+    ).first()
+    if row is None:
+        raise NotFoundError("Project member not found.", code="MEMBER_NOT_FOUND")
+
+    membership, target_user = row[0], row[1]
+    previous_role = membership.role
+    if previous_role == ProjectRole.OWNER.value and payload.role != ProjectRole.OWNER:
+        owner_count = db.scalar(
+            select(func.count(ProjectMember.id)).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.role == ProjectRole.OWNER.value,
+            )
+        )
+        if (owner_count or 0) <= 1:
+            raise ConflictError(
+                "Cannot demote the last owner of a project.",
+                code="LAST_OWNER_CANNOT_BE_DEMOTED",
+            )
+
+    membership.role = payload.role.value
+    db.add(
+        ActivityLog(
+            project_id=project.id,
+            actor_id=actor_id,
+            entity_type=ActivityEntityType.PROJECT_MEMBER.value,
+            entity_id=membership.id,
+            action="project_member.role_changed",
+            details=json.dumps(
+                {"user_id": target_user_id, "from": previous_role, "to": payload.role.value}
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(membership)
+    return _to_member_response(membership, target_user)

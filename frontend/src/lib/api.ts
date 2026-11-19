@@ -192,6 +192,12 @@ export const projectsApi = {
       body: payload,
     }),
 
+  updateMemberRole: (projectId: string, userId: string, role: ProjectRole) =>
+    apiRequest<ProjectMember>(`/projects/${projectId}/members/${userId}`, {
+      method: 'PATCH',
+      body: { role },
+    }),
+
   removeMember: (projectId: string, userId: string) =>
     apiRequest<void>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
 
