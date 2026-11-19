@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.enums import ProjectRole
 from app.models.project import Project, ProjectMember
 from app.models.story import Story
+from app.models.task import Task
 from app.models.user import User
 
 ROLE_RANK: dict[ProjectRole, int] = {
@@ -92,6 +93,47 @@ def require_story_role(min_role: ProjectRole) -> Callable[..., StoryAccess]:
             raise NotFoundError("Story not found.", code="STORY_NOT_FOUND")
         project_access = assert_project_role(db, story.project_id, current_user, min_role)
         return StoryAccess(
+            story=story,
+            project=project_access.project,
+            membership=project_access.membership,
+            role=project_access.role,
+            user=current_user,
+        )
+
+    return dependency
+
+
+@dataclass(frozen=True)
+class TaskAccess:
+    task: Task
+    story: Story
+    project: Project
+    membership: ProjectMember
+    role: ProjectRole
+    user: User
+
+
+def require_task_role(min_role: ProjectRole) -> Callable[..., TaskAccess]:
+    def dependency(
+        task_id: str,
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[Session, Depends(get_db)],
+    ) -> TaskAccess:
+        row = db.execute(
+            select(Task, Story)
+            .join(Story, Story.id == Task.story_id)
+            .where(
+                Task.id == task_id,
+                Task.deleted_at.is_(None),
+                Story.deleted_at.is_(None),
+            )
+        ).first()
+        if row is None:
+            raise NotFoundError("Task not found.", code="TASK_NOT_FOUND")
+        task, story = row[0], row[1]
+        project_access = assert_project_role(db, story.project_id, current_user, min_role)
+        return TaskAccess(
+            task=task,
             story=story,
             project=project_access.project,
             membership=project_access.membership,
