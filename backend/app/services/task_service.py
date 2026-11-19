@@ -3,12 +3,13 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
-from app.models.enums import TaskStatus
+from app.models.enums import ActivityEntityType, TaskStatus
 from app.models.project import ProjectMember
 from app.models.story import Story
 from app.models.task import Task
 from app.models.user import utc_now
 from app.schemas.task import TaskCreateRequest, TaskMoveRequest, TaskResponse, TaskUpdateRequest
+from app.services.activity import compute_diff, record_activity
 from app.services.ranking import RANK_STEP, compute_insert_position, rebalance_positions
 
 
@@ -86,6 +87,7 @@ def create_task(
     db: Session,
     story: Story,
     payload: TaskCreateRequest,
+    actor_id: str,
 ) -> TaskResponse:
     _validate_assignee(db, story.project_id, payload.assignee_id)
 
@@ -108,6 +110,16 @@ def create_task(
         position=position,
     )
     db.add(task)
+    db.flush()
+    record_activity(
+        db,
+        project_id=story.project_id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.TASK,
+        entity_id=task.id,
+        action="task.created",
+        details={"story_id": story.id, "title": task.title, "status": task.status},
+    )
     db.commit()
     db.refresh(task)
     return to_task_response(task)
@@ -118,12 +130,22 @@ def update_task(
     task: Task,
     project_id: str,
     payload: TaskUpdateRequest,
+    actor_id: str,
 ) -> TaskResponse:
     if task.version != payload.version:
         raise ConflictError(
             "Task has been modified by another request. Reload and retry.",
             code="VERSION_CONFLICT",
         )
+
+    before = {
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "assignee_id": task.assignee_id,
+        "estimate_hours": task.estimate_hours,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+    }
 
     if "assignee_id" in payload.model_fields_set:
         _validate_assignee(db, project_id, payload.assignee_id)
@@ -140,7 +162,25 @@ def update_task(
     if "due_date" in payload.model_fields_set:
         task.due_date = payload.due_date
 
+    after = {
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "assignee_id": task.assignee_id,
+        "estimate_hours": task.estimate_hours,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+    }
+
     task.version += 1
+    record_activity(
+        db,
+        project_id=project_id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.TASK,
+        entity_id=task.id,
+        action="task.updated",
+        details=compute_diff(before, after),
+    )
     db.commit()
     db.refresh(task)
     return to_task_response(task)
@@ -149,7 +189,9 @@ def update_task(
 def move_task(
     db: Session,
     task: Task,
+    project_id: str,
     payload: TaskMoveRequest,
+    actor_id: str,
 ) -> TaskResponse:
     if payload.version is not None and task.version != payload.version:
         raise ConflictError(
@@ -159,6 +201,7 @@ def move_task(
     if payload.before_id == task.id or payload.after_id == task.id:
         raise BadRequestError("Cannot position a task relative to itself.", code="INVALID_MOVE")
 
+    before = {"status": task.status, "position": task.position}
     siblings = list(
         db.scalars(
             select(Task)
@@ -204,12 +247,30 @@ def move_task(
         task.position = new_pos
 
     task.version += 1
+    record_activity(
+        db,
+        project_id=project_id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.TASK,
+        entity_id=task.id,
+        action="task.moved",
+        details=compute_diff(before, {"status": task.status, "position": task.position}),
+    )
     db.commit()
     db.refresh(task)
     return to_task_response(task)
 
 
-def soft_delete_task(db: Session, task: Task) -> None:
+def soft_delete_task(db: Session, task: Task, project_id: str, actor_id: str) -> None:
     task.deleted_at = utc_now()
     task.version += 1
+    record_activity(
+        db,
+        project_id=project_id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.TASK,
+        entity_id=task.id,
+        action="task.deleted",
+        details={"title": task.title, "story_id": task.story_id},
+    )
     db.commit()

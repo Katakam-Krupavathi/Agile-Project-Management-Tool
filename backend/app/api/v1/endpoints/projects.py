@@ -7,6 +7,7 @@ from app.api.deps import get_current_user, require_csrf
 from app.db.session import get_db
 from app.models.enums import ProjectRole
 from app.models.user import User
+from app.schemas.activity import ActivityLogResponse
 from app.schemas.common import CursorPage
 from app.schemas.project import (
     ProjectCreateRequest,
@@ -16,6 +17,7 @@ from app.schemas.project import (
     ProjectUpdateRequest,
 )
 from app.schemas.tree import ProjectTreeResponse
+from app.services import activity as activity_service
 from app.services import project_service, tree_service
 from app.services.permissions import ProjectAccess, require_project_role
 
@@ -133,3 +135,19 @@ def get_project_tree(
     db: Annotated[Session, Depends(get_db)],
 ) -> ProjectTreeResponse:
     return tree_service.get_project_tree(db, access.project, access.role)
+
+
+@router.get("/{project_id}/activity", response_model=CursorPage[ActivityLogResponse])
+def list_project_activity(
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.VIEWER))],
+    db: Annotated[Session, Depends(get_db)],
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> CursorPage[ActivityLogResponse]:
+    items, next_cursor, has_more = activity_service.list_project_activity(
+        db,
+        access.project.id,
+        cursor=cursor,
+        limit=limit,
+    )
+    return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)

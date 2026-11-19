@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
-from app.models.enums import StoryPriority, StoryStatus
+from app.models.enums import ActivityEntityType, StoryPriority, StoryStatus
 from app.models.project import Project, ProjectMember
 from app.models.story import Story
 from app.models.task import Task
@@ -14,6 +14,7 @@ from app.schemas.story import (
     StoryResponse,
     StoryUpdateRequest,
 )
+from app.services.activity import compute_diff, record_activity
 from app.services.ranking import RANK_STEP, compute_insert_position, rebalance_positions
 
 
@@ -152,6 +153,21 @@ def create_story(
         created_by=actor_id,
     )
     db.add(story)
+    db.flush()
+    record_activity(
+        db,
+        project_id=project.id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.STORY,
+        entity_id=story.id,
+        action="story.created",
+        details={
+            "key": f"{project.key}-{story.number}",
+            "title": story.title,
+            "status": story.status,
+            "priority": story.priority,
+        },
+    )
     db.commit()
     db.refresh(story)
     return to_story_response(story, project.key)
@@ -162,12 +178,23 @@ def update_story(
     story: Story,
     project: Project,
     payload: StoryUpdateRequest,
+    actor_id: str,
 ) -> StoryResponse:
     if story.version != payload.version:
         raise ConflictError(
             "Story has been modified by another request. Reload and retry.",
             code="VERSION_CONFLICT",
         )
+
+    before = {
+        "title": story.title,
+        "description": story.description,
+        "acceptance_criteria": story.acceptance_criteria,
+        "status": story.status,
+        "priority": story.priority,
+        "story_points": story.story_points,
+        "assignee_id": story.assignee_id,
+    }
 
     if "assignee_id" in payload.model_fields_set:
         _validate_assignee(db, project.id, payload.assignee_id)
@@ -186,7 +213,25 @@ def update_story(
     if "story_points" in payload.model_fields_set:
         story.story_points = payload.story_points
 
+    after = {
+        "title": story.title,
+        "description": story.description,
+        "acceptance_criteria": story.acceptance_criteria,
+        "status": story.status,
+        "priority": story.priority,
+        "story_points": story.story_points,
+        "assignee_id": story.assignee_id,
+    }
     story.version += 1
+    record_activity(
+        db,
+        project_id=project.id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.STORY,
+        entity_id=story.id,
+        action="story.updated",
+        details=compute_diff(before, after),
+    )
     db.commit()
     db.refresh(story)
     return to_story_response(story, project.key)
@@ -197,6 +242,7 @@ def move_story(
     story: Story,
     project: Project,
     payload: StoryMoveRequest,
+    actor_id: str,
 ) -> StoryResponse:
     if payload.version is not None and story.version != payload.version:
         raise ConflictError(
@@ -206,6 +252,7 @@ def move_story(
     if payload.before_id == story.id or payload.after_id == story.id:
         raise BadRequestError("Cannot position a story relative to itself.", code="INVALID_MOVE")
 
+    before = {"status": story.status, "position": story.position}
     target_status = payload.status.value
     siblings = list(
         db.scalars(
@@ -256,12 +303,21 @@ def move_story(
         story.position = new_pos
 
     story.version += 1
+    record_activity(
+        db,
+        project_id=project.id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.STORY,
+        entity_id=story.id,
+        action="story.moved",
+        details=compute_diff(before, {"status": story.status, "position": story.position}),
+    )
     db.commit()
     db.refresh(story)
     return to_story_response(story, project.key)
 
 
-def soft_delete_story(db: Session, story: Story) -> None:
+def soft_delete_story(db: Session, story: Story, actor_id: str) -> None:
     now = utc_now()
     story.deleted_at = now
     story.version += 1
@@ -269,5 +325,14 @@ def soft_delete_story(db: Session, story: Story) -> None:
         update(Task)
         .where(Task.story_id == story.id, Task.deleted_at.is_(None))
         .values(deleted_at=now, version=Task.version + 1)
+    )
+    record_activity(
+        db,
+        project_id=story.project_id,
+        actor_id=actor_id,
+        entity_type=ActivityEntityType.STORY,
+        entity_id=story.id,
+        action="story.deleted",
+        details={"title": story.title},
     )
     db.commit()

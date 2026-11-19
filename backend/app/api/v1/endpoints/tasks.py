@@ -41,7 +41,7 @@ def create_task(
     access: Annotated[StoryAccess, Depends(require_story_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> TaskResponse:
-    return task_service.create_task(db, access.story, payload)
+    return task_service.create_task(db, access.story, payload, access.user.id)
 
 
 @router.patch(
@@ -54,7 +54,7 @@ def update_task(
     access: Annotated[TaskAccess, Depends(require_task_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> TaskResponse:
-    return task_service.update_task(db, access.task, access.project.id, payload)
+    return task_service.update_task(db, access.task, access.project.id, payload, access.user.id)
 
 
 @router.delete(
@@ -66,7 +66,7 @@ def delete_task(
     access: Annotated[TaskAccess, Depends(require_task_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    task_service.soft_delete_task(db, access.task)
+    task_service.soft_delete_task(db, access.task, access.project.id, access.user.id)
 
 
 @router.post(
@@ -79,4 +79,4 @@ def move_task(
     access: Annotated[TaskAccess, Depends(require_task_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> TaskResponse:
-    return task_service.move_task(db, access.task, payload)
+    return task_service.move_task(db, access.task, access.project.id, payload, access.user.id)

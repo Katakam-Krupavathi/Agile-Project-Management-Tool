@@ -77,7 +77,7 @@ def update_story(
     access: Annotated[StoryAccess, Depends(require_story_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> StoryResponse:
-    return story_service.update_story(db, access.story, access.project, payload)
+    return story_service.update_story(db, access.story, access.project, payload, access.user.id)
 
 
 @router.delete(
@@ -89,7 +89,7 @@ def delete_story(
     access: Annotated[StoryAccess, Depends(require_story_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    story_service.soft_delete_story(db, access.story)
+    story_service.soft_delete_story(db, access.story, access.user.id)
 
 
 @router.post(
@@ -102,4 +102,4 @@ def move_story(
     access: Annotated[StoryAccess, Depends(require_story_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
 ) -> StoryResponse:
-    return story_service.move_story(db, access.story, access.project, payload)
+    return story_service.move_story(db, access.story, access.project, payload, access.user.id)
