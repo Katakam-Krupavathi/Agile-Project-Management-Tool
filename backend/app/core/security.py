@@ -1,7 +1,12 @@
+import hmac
+import secrets
+
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 _password_hasher = PasswordHasher()
+_SESSION_SALT = "agile-pm-session-v1"
 
 
 def hash_password(plain_password: str) -> str:
@@ -13,3 +18,30 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return _password_hasher.verify(password_hash, plain_password)
     except (VerifyMismatchError, InvalidHashError, VerificationError):
         return False
+
+
+def create_session_token(user_id: str, secret_key: str) -> str:
+    serializer = URLSafeTimedSerializer(secret_key, salt=_SESSION_SALT)
+    return serializer.dumps({"uid": user_id})
+
+
+def verify_session_token(token: str, secret_key: str, max_age_seconds: int) -> str | None:
+    serializer = URLSafeTimedSerializer(secret_key, salt=_SESSION_SALT)
+    try:
+        data = serializer.loads(token, max_age=max_age_seconds)
+    except (BadSignature, SignatureExpired):
+        return None
+    if not isinstance(data, dict):
+        return None
+    user_id = data.get("uid")
+    return user_id if isinstance(user_id, str) and user_id else None
+
+
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def verify_csrf_token(cookie_token: str | None, header_token: str | None) -> bool:
+    if not cookie_token or not header_token:
+        return False
+    return hmac.compare_digest(cookie_token, header_token)

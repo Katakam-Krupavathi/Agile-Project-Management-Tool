@@ -1,10 +1,19 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user, require_csrf
+from app.core.config import Settings, get_settings
+from app.core.security import create_session_token, generate_csrf_token
 from app.db.session import get_db
-from app.schemas.auth import RegisterRequest, UserResponse
+from app.models.user import User
+from app.schemas.auth import (
+    AuthSessionResponse,
+    LoginRequest,
+    RegisterRequest,
+    UserResponse,
+)
 from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -17,3 +26,66 @@ def register(
 ) -> UserResponse:
     user = auth_service.register_user(db, payload)
     return UserResponse.model_validate(user)
+
+
+@router.post("/login", response_model=AuthSessionResponse)
+def login(
+    payload: LoginRequest,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AuthSessionResponse:
+    user = auth_service.authenticate_user(db, str(payload.email), payload.password)
+    session_token = create_session_token(user.id, settings.secret_key)
+    csrf_token = generate_csrf_token()
+
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=session_token,
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure,
+        max_age=settings.session_max_age_seconds,
+        path="/",
+    )
+    response.set_cookie(
+        key=settings.csrf_cookie_name,
+        value=csrf_token,
+        httponly=False,
+        samesite="lax",
+        secure=settings.session_cookie_secure,
+        max_age=settings.session_max_age_seconds,
+        path="/",
+    )
+    return AuthSessionResponse(
+        user=UserResponse.model_validate(user),
+        csrf_token=csrf_token,
+    )
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(get_current_user), Depends(require_csrf)],
+)
+def logout(
+    response: Response,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        path="/",
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key=settings.csrf_cookie_name,
+        path="/",
+        samesite="lax",
+    )
+
+
+@router.get("/me", response_model=UserResponse)
+def me(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserResponse:
+    return UserResponse.model_validate(current_user)

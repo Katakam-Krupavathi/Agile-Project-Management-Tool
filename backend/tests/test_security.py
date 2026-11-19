@@ -4,7 +4,14 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError
-from app.core.security import hash_password, verify_password
+from app.core.security import (
+    create_session_token,
+    generate_csrf_token,
+    hash_password,
+    verify_csrf_token,
+    verify_password,
+    verify_session_token,
+)
 from app.db.base import Base
 from app.db.session import create_db_engine
 from app.schemas.auth import RegisterRequest
@@ -50,3 +57,19 @@ def test_register_user_normalizes_email_and_rejects_duplicates(tmp_path: Path) -
             assert exc_info.value.code == "EMAIL_ALREADY_REGISTERED"
     finally:
         engine.dispose()
+
+
+def test_session_token_roundtrip_and_tamper_rejection() -> None:
+    token = create_session_token("user-123", "test-secret")
+    assert verify_session_token(token, "test-secret", max_age_seconds=60) == "user-123"
+    assert verify_session_token(token, "wrong-secret", max_age_seconds=60) is None
+    assert verify_session_token(f"{token}tampered", "test-secret", max_age_seconds=60) is None
+
+
+def test_csrf_token_verification() -> None:
+    token = generate_csrf_token()
+    assert len(token) >= 32
+    assert verify_csrf_token(token, token) is True
+    assert verify_csrf_token(token, "mismatch") is False
+    assert verify_csrf_token(None, token) is False
+    assert verify_csrf_token(token, None) is False

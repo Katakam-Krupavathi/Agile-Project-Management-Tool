@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173"]
     database_url: str = "sqlite:///./data/agile_pm.db"
     secret_key: str = "dev-insecure-secret-key-change-in-production"
+    session_cookie_name: str = "agile_pm_session"
+    session_cookie_secure: bool = False
+    session_max_age_seconds: int = 60 * 60 * 24 * 7
+    csrf_cookie_name: str = "agile_pm_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
 
     @field_validator("cors_origins", mode="before")
     @classmethod
