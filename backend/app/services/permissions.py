@@ -11,6 +11,7 @@ from app.core.errors import ForbiddenError, NotFoundError
 from app.db.session import get_db
 from app.models.enums import ProjectRole
 from app.models.project import Project, ProjectMember
+from app.models.story import Story
 from app.models.user import User
 
 ROLE_RANK: dict[ProjectRole, int] = {
@@ -65,5 +66,37 @@ def require_project_role(min_role: ProjectRole) -> Callable[..., ProjectAccess]:
         db: Annotated[Session, Depends(get_db)],
     ) -> ProjectAccess:
         return assert_project_role(db, project_id, current_user, min_role)
+
+    return dependency
+
+
+@dataclass(frozen=True)
+class StoryAccess:
+    story: Story
+    project: Project
+    membership: ProjectMember
+    role: ProjectRole
+    user: User
+
+
+def require_story_role(min_role: ProjectRole) -> Callable[..., StoryAccess]:
+    def dependency(
+        story_id: str,
+        current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[Session, Depends(get_db)],
+    ) -> StoryAccess:
+        story = db.scalar(
+            select(Story).where(Story.id == story_id, Story.deleted_at.is_(None))
+        )
+        if story is None:
+            raise NotFoundError("Story not found.", code="STORY_NOT_FOUND")
+        project_access = assert_project_role(db, story.project_id, current_user, min_role)
+        return StoryAccess(
+            story=story,
+            project=project_access.project,
+            membership=project_access.membership,
+            role=project_access.role,
+            user=current_user,
+        )
 
     return dependency
