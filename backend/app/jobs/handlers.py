@@ -11,7 +11,7 @@ from app.models.project import Project
 from app.models.story import Story
 from app.models.task import Task
 from app.models.user import utc_now
-from app.services import notification_service
+from app.services import notification_service, report_service
 
 
 @register("send_notification")
@@ -82,3 +82,8 @@ def handle_due_soon_reminder(db: Session, payload: dict[str, Any]) -> dict[str, 
         "matched_tasks": len(rows),
         "notification_job_ids": enqueued_job_ids,
     }
+
+
+@register("generate_project_report")
+def handle_generate_project_report(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    return report_service.generate_report_for_job(db, payload)

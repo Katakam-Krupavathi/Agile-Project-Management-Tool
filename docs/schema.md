@@ -290,3 +290,20 @@ SQLite-backed asynchronous job queue polled by the background worker process.
 | `updated_at` | `DATETIME` | `NOT NULL` | UTC last-update timestamp. |
 
 - **Indexes**: `ix_jobs_status_run_at (status, run_at)`.
+
+
+### `reports`
+
+Stores generated Markdown project status reports produced asynchronously by the worker.
+
+| Column | Type | Constraints | Description |
+| --- | --- | --- | --- |
+| `id` | `VARCHAR(36)` | `PK` | UUIDv4 identifier for the report. |
+| `project_id` | `VARCHAR(36)` | `NOT NULL`, `FK -> projects.id (CASCADE)` | Project the report summarizes. |
+| `job_id` | `VARCHAR(36)` | nullable, `UNIQUE`, `FK -> jobs.id (SET NULL)` | Job that generated this report (enforces idempotent creation). |
+| `created_by` | `VARCHAR(36)` | nullable, `FK -> users.id (SET NULL)` | User who requested the report. |
+| `title` | `VARCHAR(200)` | `NOT NULL` | Human-readable report title. |
+| `content_markdown` | `TEXT` | `NOT NULL` | Rendered Markdown status report body. |
+| `created_at` | `DATETIME` | `NOT NULL` | UTC timestamp when the report was generated. |
+
+- **Indexes**: `ix_reports_project_id_created_at (project_id, created_at)`.
