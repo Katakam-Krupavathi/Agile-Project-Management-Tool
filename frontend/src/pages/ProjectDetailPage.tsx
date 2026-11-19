@@ -5,7 +5,12 @@ import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
 import { OutlineView } from '../components/workspace/OutlineView';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
-import { useProjectMembers } from '../hooks/useWorkspace';
+import {
+  useCreateTask,
+  useProjectMembers,
+  useUpdateStory,
+  useUpdateTask,
+} from '../hooks/useWorkspace';
 
 export type WorkspaceViewMode = 'outline' | 'board';
 
@@ -18,11 +23,15 @@ export function ProjectDetailPage() {
   const { data: projectsPage } = useProjects(Boolean(user));
   const { data: tree, isLoading, isError, error, refetch } = useProjectTree(projectId);
   const { data: membersPage } = useProjectMembers(projectId);
+  const updateStory = useUpdateStory(projectId ?? '');
+  const createTask = useCreateTask(projectId ?? '');
+  const updateTask = useUpdateTask(projectId ?? '');
 
   if (!user) return null;
 
   const projects = projectsPage?.items ?? [];
   const members = membersPage?.items ?? [];
+  const canEdit = tree ? tree.project.role !== 'viewer' : false;
   const rawView = searchParams.get('view');
   const viewMode: WorkspaceViewMode = rawView === 'board' ? 'board' : 'outline';
 
@@ -115,7 +124,26 @@ export function ProjectDetailPage() {
             </div>
           </section>
 
-          <OutlineView stories={tree.stories} members={members} />
+          <OutlineView
+            stories={tree.stories}
+            members={members}
+            canEdit={canEdit}
+            onUpdateStory={(story, patch) =>
+              updateStory.mutate({
+                storyId: story.id,
+                payload: { ...patch, version: story.version },
+              })
+            }
+            onCreateTask={async (storyId, title) => {
+              await createTask.mutateAsync({ storyId, payload: { title } });
+            }}
+            onUpdateTask={(task, patch) =>
+              updateTask.mutate({
+                taskId: task.id,
+                payload: { ...patch, version: task.version },
+              })
+            }
+          />
         </div>
       )}
     </AppShell>
