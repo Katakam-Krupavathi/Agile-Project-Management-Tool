@@ -3,9 +3,11 @@ import { Kanban, ListTree } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
 import { OutlineView } from '../components/workspace/OutlineView';
+import { QuickAddBar } from '../components/workspace/QuickAddBar';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
 import {
+  useCreateStory,
   useCreateTask,
   useProjectMembers,
   useUpdateStory,
@@ -23,6 +25,7 @@ export function ProjectDetailPage() {
   const { data: projectsPage } = useProjects(Boolean(user));
   const { data: tree, isLoading, isError, error, refetch } = useProjectTree(projectId);
   const { data: membersPage } = useProjectMembers(projectId);
+  const createStory = useCreateStory(projectId ?? '');
   const updateStory = useUpdateStory(projectId ?? '');
   const createTask = useCreateTask(projectId ?? '');
   const updateTask = useUpdateTask(projectId ?? '');
@@ -123,6 +126,30 @@ export function ProjectDetailPage() {
               <ProgressRail value={tree.rollup.progress_pct} />
             </div>
           </section>
+
+          {canEdit && viewMode === 'outline' && (
+            <QuickAddBar
+              members={members}
+              submitting={createStory.isPending}
+              onQuickAdd={async (parsed) => {
+                const story = await createStory.mutateAsync({
+                  title: parsed.title,
+                  assignee_id: parsed.assigneeId,
+                  priority: parsed.priority,
+                });
+                if (parsed.dueDate) {
+                  await createTask.mutateAsync({
+                    storyId: story.id,
+                    payload: {
+                      title: parsed.title,
+                      assignee_id: parsed.assigneeId,
+                      due_date: parsed.dueDate,
+                    },
+                  });
+                }
+              }}
+            />
+          )}
 
           <OutlineView
             stories={tree.stories}
