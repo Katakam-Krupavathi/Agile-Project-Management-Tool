@@ -15,7 +15,8 @@ from app.schemas.project import (
     ProjectResponse,
     ProjectUpdateRequest,
 )
-from app.services import project_service
+from app.schemas.tree import ProjectTreeResponse
+from app.services import project_service, tree_service
 from app.services.permissions import ProjectAccess, require_project_role
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -124,3 +125,11 @@ def remove_member(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     project_service.remove_project_member(db, access.project, user_id, access.user.id)
+
+
+@router.get("/{project_id}/tree", response_model=ProjectTreeResponse)
+def get_project_tree(
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.VIEWER))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProjectTreeResponse:
+    return tree_service.get_project_tree(db, access.project, access.role)
