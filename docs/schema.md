@@ -274,14 +274,18 @@ SQLite-backed asynchronous job queue polled by the background worker process.
 | `id` | `VARCHAR(36)` | `PK` | UUIDv4 identifier for the job. |
 | `job_type` | `VARCHAR(64)` | `NOT NULL` | Handler key dispatched by the worker (e.g., `send_notification`, `check_due_tasks`). |
 | `payload` | `TEXT` | `NOT NULL`, default `'{}'` | JSON-encoded input arguments for the job handler. |
-| `status` | `VARCHAR(16)` | `NOT NULL`, default `'pending'`, `CHECK (status IN ('pending','running','succeeded','failed','dead'))` | Lifecycle state of the job. |
+| `result` | `TEXT` | nullable | JSON-encoded output returned by the handler on success. |
+| `status` | `VARCHAR(16)` | `NOT NULL`, default `'queued'`, `CHECK (status IN ('queued','running','succeeded','failed','dead'))` | Lifecycle state of the job. |
 | `run_at` | `DATETIME` | `NOT NULL` | Earliest UTC timestamp when the worker may claim the job (supports retries/backoff). |
 | `attempts` | `INTEGER` | `NOT NULL`, default `0`, `CHECK (>= 0)` | Number of execution attempts so far. |
 | `max_attempts` | `INTEGER` | `NOT NULL`, default `3`, `CHECK (>= 1)` | Maximum attempts before transitioning to `dead`. |
 | `locked_at` | `DATETIME` | nullable | UTC timestamp when a worker leased the job. |
 | `locked_by` | `VARCHAR(120)` | nullable | Worker instance identifier currently holding the lease. |
-| `last_error` | `TEXT` | nullable | Error message or traceback from the most recent failed attempt. |
+| `last_error` | `TEXT` | nullable | Error message from the most recent failed attempt. |
 | `idempotency_key` | `VARCHAR(128)` | nullable, `UNIQUE` | Optional deduplication key to prevent duplicate job enqueues. |
+| `project_id` | `VARCHAR(36)` | nullable, `FK -> projects.id (CASCADE)` | Optional project scope used for RBAC visibility and owner retry. |
+| `created_by` | `VARCHAR(36)` | nullable, `FK -> users.id (SET NULL)` | Optional user who enqueued the job. |
+| `completed_at` | `DATETIME` | nullable | UTC timestamp when the job succeeded. |
 | `created_at` | `DATETIME` | `NOT NULL` | UTC creation timestamp. |
 | `updated_at` | `DATETIME` | `NOT NULL` | UTC last-update timestamp. |
 
