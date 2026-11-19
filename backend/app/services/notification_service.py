@@ -137,3 +137,38 @@ def mark_all_notifications_read(db: Session, user_id: str) -> int:
     )
     db.commit()
     return int(result.rowcount or 0)
+
+
+def get_notifications_since(
+    db: Session,
+    user_id: str,
+    *,
+    last_event_id: str | None = None,
+    limit: int = 50,
+) -> list[NotificationResponse]:
+    db.expire_all()
+    stmt = select(Notification).where(Notification.user_id == user_id)
+
+    if last_event_id:
+        anchor = db.scalar(
+            select(Notification).where(
+                Notification.id == last_event_id,
+                Notification.user_id == user_id,
+            )
+        )
+        if anchor is not None:
+            stmt = stmt.where(
+                or_(
+                    Notification.created_at > anchor.created_at,
+                    and_(
+                        Notification.created_at == anchor.created_at,
+                        Notification.id > anchor.id,
+                    ),
+                )
+            )
+    else:
+        stmt = stmt.where(Notification.read_at.is_(None))
+
+    stmt = stmt.order_by(Notification.created_at.asc(), Notification.id.asc()).limit(limit)
+    rows = list(db.scalars(stmt).all())
+    return [to_notification_response(row) for row in rows]
