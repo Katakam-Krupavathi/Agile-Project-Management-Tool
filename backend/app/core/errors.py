@@ -9,9 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 logger = logging.getLogger(__name__)
 
 PROBLEM_BASE_URI = "https://agile-pm.local/errors"
-HTTP_422_STATUS = getattr(
-    status, "HTTP_422_UNPROCESSABLE_CONTENT", status.HTTP_422_UNPROCESSABLE_ENTITY
-)
+HTTP_422_STATUS = 422
 
 
 class AppError(Exception):

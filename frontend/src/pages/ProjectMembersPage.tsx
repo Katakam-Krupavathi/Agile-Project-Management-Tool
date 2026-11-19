@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2, UserPlus } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { buildProjectNav } from '../components/layout/projectNav';
-import { Avatar, Button, ErrorState, Input, Select, Skeleton } from '../components/ui';
+import { Avatar, Button, EmptyState, ErrorState, Input, Select, Skeleton } from '../components/ui';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
 import {
@@ -116,74 +116,81 @@ export function ProjectMembersPage() {
             </Button>
           </form>
 
-          <ul className="divide-y divide-neutral-200 overflow-hidden rounded border border-neutral-200 bg-neutral-0">
-            {members.map((member) => (
-              <li
-                key={member.id}
-                className="flex flex-wrap items-center justify-between gap-4 px-4 py-3.5"
-              >
-                <div className="flex items-center gap-3">
-                  <Avatar name={member.name} size="md" />
-                  <div>
-                    <p className="text-sm font-medium text-neutral-900">{member.name}</p>
-                    <p className="text-xs text-neutral-500">{member.email}</p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <select
-                    aria-label={`Role for ${member.name}`}
-                    value={member.role}
-                    onChange={(e) =>
-                      updateRole.mutate({
-                        userId: member.user_id,
-                        role: e.target.value as ProjectRole,
-                      })
-                    }
-                    className="rounded border border-neutral-200 bg-neutral-0 px-2.5 py-1.5 text-xs font-medium text-neutral-900 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand"
-                  >
-                    {ROLE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-
-                  {confirmRemoveId === member.user_id ? (
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        loading={removeMember.isPending}
-                        onClick={async () => {
-                          await removeMember.mutateAsync(member.user_id);
-                          setConfirmRemoveId(null);
-                        }}
-                      >
-                        Remove
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setConfirmRemoveId(null)}
-                      >
-                        Cancel
-                      </Button>
+          {members.length === 0 ? (
+            <EmptyState
+              title="No project members"
+              description="Add a teammate by email above to collaborate on this project."
+            />
+          ) : (
+            <ul className="divide-y divide-neutral-200 overflow-hidden rounded border border-neutral-200 bg-neutral-0">
+              {members.map((member) => (
+                <li
+                  key={member.id}
+                  className="flex flex-wrap items-center justify-between gap-4 px-4 py-3.5"
+                >
+                  <div className="flex items-center gap-3">
+                    <Avatar name={member.name} size="md" />
+                    <div>
+                      <p className="text-sm font-medium text-neutral-900">{member.name}</p>
+                      <p className="text-xs text-neutral-500">{member.email}</p>
                     </div>
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label={`Remove ${member.name}`}
-                      onClick={() => setConfirmRemoveId(member.user_id)}
-                      className="rounded p-1.5 text-neutral-500 hover:bg-neutral-50 hover:text-brand"
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <select
+                      aria-label={`Role for ${member.name}`}
+                      value={member.role}
+                      onChange={(e) =>
+                        updateRole.mutate({
+                          userId: member.user_id,
+                          role: e.target.value as ProjectRole,
+                        })
+                      }
+                      className="rounded border border-neutral-200 bg-neutral-0 px-2.5 py-1.5 text-xs font-medium text-neutral-900 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand"
                     >
-                      <Trash2 className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                      {ROLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {confirmRemoveId === member.user_id ? (
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={removeMember.isPending}
+                          onClick={async () => {
+                            await removeMember.mutateAsync(member.user_id);
+                            setConfirmRemoveId(null);
+                          }}
+                        >
+                          Remove
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setConfirmRemoveId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Remove ${member.name}`}
+                        onClick={() => setConfirmRemoveId(member.user_id)}
+                        className="rounded p-1.5 text-neutral-500 hover:bg-neutral-50 hover:text-brand"
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </AppShell>
