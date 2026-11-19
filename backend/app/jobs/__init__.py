@@ -1,3 +1,4 @@
+from app.jobs import handlers as _handlers  # noqa: F401
 from app.jobs.queue import enqueue_job, get_job_by_id
 from app.jobs.registry import get_handler, list_registered_job_types, register
 
