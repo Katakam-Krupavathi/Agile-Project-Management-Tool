@@ -73,3 +73,21 @@ def test_csrf_token_verification() -> None:
     assert verify_csrf_token(token, "mismatch") is False
     assert verify_csrf_token(None, token) is False
     assert verify_csrf_token(token, None) is False
+
+
+def test_sliding_window_rate_limiter_enforces_and_expires() -> None:
+    from app.core.rate_limit import SlidingWindowRateLimiter
+
+    now = [100.0]
+    limiter = SlidingWindowRateLimiter(clock=lambda: now[0])
+
+    assert limiter.check("ip:user", max_attempts=2, window_seconds=60) is None
+    limiter.record_attempt("ip:user", window_seconds=60)
+    assert limiter.check("ip:user", max_attempts=2, window_seconds=60) is None
+    limiter.record_attempt("ip:user", window_seconds=60)
+
+    retry_after = limiter.check("ip:user", max_attempts=2, window_seconds=60)
+    assert retry_after == 60
+
+    now[0] += 61.0
+    assert limiter.check("ip:user", max_attempts=2, window_seconds=60) is None

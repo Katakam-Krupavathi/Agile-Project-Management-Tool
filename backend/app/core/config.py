@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     session_max_age_seconds: int = 60 * 60 * 24 * 7
     csrf_cookie_name: str = "agile_pm_csrf"
     csrf_header_name: str = "X-CSRF-Token"
+    login_rate_limit_max_attempts: int = 5
+    login_rate_limit_window_seconds: int = 60
 
     @field_validator("cors_origins", mode="before")
     @classmethod

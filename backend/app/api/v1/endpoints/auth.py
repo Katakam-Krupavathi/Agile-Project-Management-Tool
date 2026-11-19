@@ -1,10 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_csrf
 from app.core.config import Settings, get_settings
+from app.core.errors import RateLimitError, UnauthorizedError
+from app.core.rate_limit import login_rate_limiter
 from app.core.security import create_session_token, generate_csrf_token
 from app.db.session import get_db
 from app.models.user import User
@@ -31,11 +33,32 @@ def register(
 @router.post("/login", response_model=AuthSessionResponse)
 def login(
     payload: LoginRequest,
+    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AuthSessionResponse:
-    user = auth_service.authenticate_user(db, str(payload.email), payload.password)
+    client_ip = request.client.host if request.client else "unknown"
+    rate_key = f"{client_ip}:{auth_service.normalize_email(str(payload.email))}"
+    retry_after = login_rate_limiter.check(
+        rate_key,
+        settings.login_rate_limit_max_attempts,
+        settings.login_rate_limit_window_seconds,
+    )
+    if retry_after is not None:
+        raise RateLimitError(
+            "Too many login attempts. Please try again later.",
+            code="LOGIN_RATE_LIMITED",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    try:
+        user = auth_service.authenticate_user(db, str(payload.email), payload.password)
+    except UnauthorizedError:
+        login_rate_limiter.record_attempt(rate_key, settings.login_rate_limit_window_seconds)
+        raise
+
+    login_rate_limiter.clear(rate_key)
     session_token = create_session_token(user.id, settings.secret_key)
     csrf_token = generate_csrf_token()
 
