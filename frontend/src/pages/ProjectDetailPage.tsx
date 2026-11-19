@@ -1,9 +1,14 @@
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Kanban, ListTree } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
 import { OutlineView } from '../components/workspace/OutlineView';
 import { QuickAddBar } from '../components/workspace/QuickAddBar';
+import {
+  WorkspaceFilters,
+  type WorkspaceFilterState,
+} from '../components/workspace/WorkspaceFilters';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
 import {
@@ -29,6 +34,40 @@ export function ProjectDetailPage() {
   const updateStory = useUpdateStory(projectId ?? '');
   const createTask = useCreateTask(projectId ?? '');
   const updateTask = useUpdateTask(projectId ?? '');
+  const [filters, setFilters] = useState<WorkspaceFilterState>({
+    status: 'all',
+    assigneeId: '',
+    query: '',
+  });
+
+  const filteredStories = useMemo(() => {
+    if (!tree) return [];
+    const q = filters.query.trim().toLowerCase();
+    return tree.stories.filter((node) => {
+      if (filters.status !== 'all' && node.story.status !== filters.status) {
+        return false;
+      }
+      if (filters.assigneeId === '__unassigned__' && node.story.assignee_id !== null) {
+        return false;
+      }
+      if (
+        filters.assigneeId &&
+        filters.assigneeId !== '__unassigned__' &&
+        node.story.assignee_id !== filters.assigneeId
+      ) {
+        return false;
+      }
+      if (q) {
+        const inStory =
+          node.story.key.toLowerCase().includes(q) ||
+          node.story.title.toLowerCase().includes(q) ||
+          (node.story.description ?? '').toLowerCase().includes(q);
+        const inTasks = node.tasks.some((t) => t.title.toLowerCase().includes(q));
+        if (!inStory && !inTasks) return false;
+      }
+      return true;
+    });
+  }, [tree, filters]);
 
   if (!user) return null;
 
@@ -151,8 +190,10 @@ export function ProjectDetailPage() {
             />
           )}
 
+          <WorkspaceFilters value={filters} members={members} onChange={setFilters} />
+
           <OutlineView
-            stories={tree.stories}
+            stories={filteredStories}
             members={members}
             canEdit={canEdit}
             onUpdateStory={(story, patch) =>
