@@ -12,6 +12,7 @@ import {
   type WorkspaceFilterState,
 } from '../components/workspace/WorkspaceFilters';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
+import { canEditProjectItems } from '../lib/permissions';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
 import {
   useCreateStory,
@@ -87,7 +88,7 @@ export function ProjectDetailPage() {
   const projects = projectsPage?.items ?? [];
   const members = membersPage?.items ?? [];
   const activity = activityPage?.items ?? [];
-  const canEdit = tree ? tree.project.role !== 'viewer' : false;
+  const canEdit = canEditProjectItems(tree?.project.role);
   const selectedStoryNode =
     selectedStoryId && tree
       ? tree.stories.find((n) => n.story.id === selectedStoryId) ?? null

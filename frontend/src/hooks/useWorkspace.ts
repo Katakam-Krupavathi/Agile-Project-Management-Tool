@@ -1,12 +1,36 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiError, projectsApi, storiesApi, tasksApi } from '../lib/api';
 import type { ProjectTree, StoryPriority, StoryStatus, TaskStatus } from '../lib/types';
-import { useToast } from '../components/ui';
+import { useToast, type ToastAction, type ToastTone } from '../components/ui';
 import { projectTreeKey } from './useProjects';
 
 export const projectMembersKey = (projectId: string) => ['projects', projectId, 'members'] as const;
 export const projectActivityKey = (projectId: string) =>
   ['projects', projectId, 'activity'] as const;
+
+function notifyWorkspaceError(
+  err: unknown,
+  fallback: string,
+  projectId: string,
+  queryClient: QueryClient,
+  pushToast: (message: string, tone?: ToastTone, action?: ToastAction) => void,
+) {
+  if (err instanceof ApiError && err.status === 409) {
+    pushToast(
+      err.detail || 'This item was modified by another request. Reload to get the latest version.',
+      'error',
+      {
+        label: 'Reload',
+        onClick: () => {
+          queryClient.invalidateQueries({ queryKey: projectTreeKey(projectId) });
+          queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
+        },
+      },
+    );
+    return;
+  }
+  pushToast(err instanceof ApiError ? err.detail : fallback, 'error');
+}
 
 export function useProjectMembers(projectId: string | undefined) {
   return useQuery({
@@ -75,7 +99,7 @@ export function useUpdateStory(projectId: string) {
       queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
     },
     onError: (err) => {
-      pushToast(err instanceof ApiError ? err.detail : 'Failed to update story.', 'error');
+      notifyWorkspaceError(err, 'Failed to update story.', projectId, queryClient, pushToast);
     },
   });
 }
@@ -133,7 +157,7 @@ export function useMoveStory(projectId: string) {
       if (context?.previous) {
         queryClient.setQueryData(projectTreeKey(projectId), context.previous);
       }
-      pushToast(err instanceof ApiError ? err.detail : 'Failed to move story.', 'error');
+      notifyWorkspaceError(err, 'Failed to move story.', projectId, queryClient, pushToast);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: projectTreeKey(projectId) });
@@ -213,7 +237,7 @@ export function useUpdateTask(projectId: string) {
       queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
     },
     onError: (err) => {
-      pushToast(err instanceof ApiError ? err.detail : 'Failed to update task.', 'error');
+      notifyWorkspaceError(err, 'Failed to update task.', projectId, queryClient, pushToast);
     },
   });
 }
@@ -240,7 +264,7 @@ export function useMoveTask(projectId: string) {
       queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
     },
     onError: (err) => {
-      pushToast(err instanceof ApiError ? err.detail : 'Failed to reorder task.', 'error');
+      notifyWorkspaceError(err, 'Failed to reorder task.', projectId, queryClient, pushToast);
     },
   });
 }

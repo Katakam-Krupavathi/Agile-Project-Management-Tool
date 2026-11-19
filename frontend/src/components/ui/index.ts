@@ -10,4 +10,4 @@ export { Modal, type ModalProps } from './Modal';
 export { ProgressRail, type ProgressRailProps } from './ProgressRail';
 export { Select, type SelectOption, type SelectProps } from './Select';
 export { Skeleton, type SkeletonProps } from './Skeleton';
-export { ToastProvider, useToast, type ToastTone } from './Toast';
+export { ToastProvider, useToast, type ToastAction, type ToastTone } from './Toast';

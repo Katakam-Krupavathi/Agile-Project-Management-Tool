@@ -3,14 +3,20 @@ import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 
 export type ToastTone = 'info' | 'success' | 'error';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ToastItem {
   id: number;
   tone: ToastTone;
   message: string;
+  action?: ToastAction;
 }
 
 interface ToastContextValue {
-  pushToast: (message: string, tone?: ToastTone) => void;
+  pushToast: (message: string, tone?: ToastTone, action?: ToastAction) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -23,10 +29,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const pushToast = useCallback(
-    (message: string, tone: ToastTone = 'info') => {
+    (message: string, tone: ToastTone = 'info', action?: ToastAction) => {
       const id = Date.now() + Math.floor(Math.random() * 1000);
-      setToasts((prev) => [...prev, { id, tone, message }]);
-      window.setTimeout(() => dismiss(id), 4500);
+      setToasts((prev) => [...prev, { id, tone, message, action }]);
+      window.setTimeout(() => dismiss(id), action ? 8000 : 4500);
     },
     [dismiss],
   );
@@ -60,7 +66,26 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             {toast.tone === 'info' && (
               <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
             )}
-            <p className="flex-1 leading-snug">{toast.message}</p>
+            <div className="flex-1 space-y-1.5">
+              <p className="leading-snug">{toast.message}</p>
+              {toast.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.action?.onClick();
+                    dismiss(toast.id);
+                  }}
+                  className={[
+                    'rounded border px-2 py-0.5 text-xs font-semibold transition-colors',
+                    toast.tone === 'error'
+                      ? 'border-neutral-0/40 bg-neutral-0/10 text-neutral-0 hover:bg-neutral-0/20'
+                      : 'border-brand bg-brand-50 text-brand hover:bg-brand-100',
+                  ].join(' ')}
+                >
+                  {toast.action.label}
+                </button>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => dismiss(toast.id)}
