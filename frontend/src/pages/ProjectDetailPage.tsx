@@ -6,6 +6,7 @@ import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
 import { BoardView } from '../components/workspace/BoardView';
 import { OutlineView } from '../components/workspace/OutlineView';
 import { QuickAddBar } from '../components/workspace/QuickAddBar';
+import { StoryFocusDrawer } from '../components/workspace/StoryFocusDrawer';
 import {
   WorkspaceFilters,
   type WorkspaceFilterState,
@@ -15,7 +16,11 @@ import { useProjects, useProjectTree } from '../hooks/useProjects';
 import {
   useCreateStory,
   useCreateTask,
+  useDeleteStory,
+  useDeleteTask,
   useMoveStory,
+  useMoveTask,
+  useProjectActivity,
   useProjectMembers,
   useUpdateStory,
   useUpdateTask,
@@ -32,11 +37,16 @@ export function ProjectDetailPage() {
   const { data: projectsPage } = useProjects(Boolean(user));
   const { data: tree, isLoading, isError, error, refetch } = useProjectTree(projectId);
   const { data: membersPage } = useProjectMembers(projectId);
+  const { data: activityPage } = useProjectActivity(projectId);
   const createStory = useCreateStory(projectId ?? '');
   const updateStory = useUpdateStory(projectId ?? '');
   const moveStory = useMoveStory(projectId ?? '');
+  const deleteStory = useDeleteStory(projectId ?? '');
   const createTask = useCreateTask(projectId ?? '');
   const updateTask = useUpdateTask(projectId ?? '');
+  const moveTask = useMoveTask(projectId ?? '');
+  const deleteTask = useDeleteTask(projectId ?? '');
+  const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null);
   const [filters, setFilters] = useState<WorkspaceFilterState>({
     status: 'all',
     assigneeId: '',
@@ -76,7 +86,12 @@ export function ProjectDetailPage() {
 
   const projects = projectsPage?.items ?? [];
   const members = membersPage?.items ?? [];
+  const activity = activityPage?.items ?? [];
   const canEdit = tree ? tree.project.role !== 'viewer' : false;
+  const selectedStoryNode =
+    selectedStoryId && tree
+      ? tree.stories.find((n) => n.story.id === selectedStoryId) ?? null
+      : null;
   const rawView = searchParams.get('view');
   const viewMode: WorkspaceViewMode = rawView === 'board' ? 'board' : 'outline';
 
@@ -200,6 +215,7 @@ export function ProjectDetailPage() {
               stories={filteredStories}
               members={members}
               canEdit={canEdit}
+              onSelectStory={setSelectedStoryId}
               onUpdateStory={(story, patch) =>
                 updateStory.mutate({
                   storyId: story.id,
@@ -221,6 +237,7 @@ export function ProjectDetailPage() {
               stories={filteredStories}
               members={members}
               canEdit={canEdit}
+              onSelectStory={setSelectedStoryId}
               onMoveStory={(story, target) =>
                 moveStory.mutate({
                   storyId: story.id,
@@ -229,6 +246,41 @@ export function ProjectDetailPage() {
               }
             />
           )}
+
+          <StoryFocusDrawer
+            node={selectedStoryNode}
+            members={members}
+            activity={activity}
+            canEdit={canEdit}
+            onClose={() => setSelectedStoryId(null)}
+            onUpdateStory={async (story, patch) => {
+              await updateStory.mutateAsync({
+                storyId: story.id,
+                payload: { ...patch, version: story.version },
+              });
+            }}
+            onDeleteStory={async (storyId) => {
+              await deleteStory.mutateAsync(storyId);
+            }}
+            onCreateTask={async (storyId, payload) => {
+              await createTask.mutateAsync({ storyId, payload });
+            }}
+            onUpdateTask={async (task, patch) => {
+              await updateTask.mutateAsync({
+                taskId: task.id,
+                payload: { ...patch, version: task.version },
+              });
+            }}
+            onMoveTask={async (task, target) => {
+              await moveTask.mutateAsync({
+                taskId: task.id,
+                payload: { ...target, version: task.version },
+              });
+            }}
+            onDeleteTask={async (taskId) => {
+              await deleteTask.mutateAsync(taskId);
+            }}
+          />
         </div>
       )}
     </AppShell>
