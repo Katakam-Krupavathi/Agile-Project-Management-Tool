@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
+from app.jobs.queue import enqueue_job
 from app.models.enums import ActivityEntityType, StoryPriority, StoryStatus
 from app.models.project import Project, ProjectMember
 from app.models.story import Story
@@ -168,6 +169,22 @@ def create_story(
             "priority": story.priority,
         },
     )
+    if story.assignee_id:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": story.assignee_id,
+                "project_id": project.id,
+                "type": "story.assigned",
+                "title": f"Assigned to {project.key}-{story.number}: {story.title}",
+                "body": f"You were assigned to story {project.key}-{story.number}.",
+                "entity_type": ActivityEntityType.STORY.value,
+                "entity_id": story.id,
+            },
+            project_id=project.id,
+            created_by=actor_id,
+        )
     db.commit()
     db.refresh(story)
     return to_story_response(story, project.key)
@@ -232,6 +249,38 @@ def update_story(
         action="story.updated",
         details=compute_diff(before, after),
     )
+    if story.assignee_id and story.assignee_id != before["assignee_id"]:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": story.assignee_id,
+                "project_id": project.id,
+                "type": "story.assigned",
+                "title": f"Assigned to {project.key}-{story.number}: {story.title}",
+                "body": f"You were assigned to story {project.key}-{story.number}.",
+                "entity_type": ActivityEntityType.STORY.value,
+                "entity_id": story.id,
+            },
+            project_id=project.id,
+            created_by=actor_id,
+        )
+    if story.assignee_id and story.status != before["status"]:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": story.assignee_id,
+                "project_id": project.id,
+                "type": "story.status_changed",
+                "title": f"{project.key}-{story.number} moved to {story.status}",
+                "body": f"Story '{story.title}' changed from {before['status']} to {story.status}.",
+                "entity_type": ActivityEntityType.STORY.value,
+                "entity_id": story.id,
+            },
+            project_id=project.id,
+            created_by=actor_id,
+        )
     db.commit()
     db.refresh(story)
     return to_story_response(story, project.key)
@@ -312,6 +361,22 @@ def move_story(
         action="story.moved",
         details=compute_diff(before, {"status": story.status, "position": story.position}),
     )
+    if story.assignee_id and story.status != before["status"]:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": story.assignee_id,
+                "project_id": project.id,
+                "type": "story.status_changed",
+                "title": f"{project.key}-{story.number} moved to {story.status}",
+                "body": f"Story '{story.title}' changed from {before['status']} to {story.status}.",
+                "entity_type": ActivityEntityType.STORY.value,
+                "entity_id": story.id,
+            },
+            project_id=project.id,
+            created_by=actor_id,
+        )
     db.commit()
     db.refresh(story)
     return to_story_response(story, project.key)

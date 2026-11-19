@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
+from app.jobs.queue import enqueue_job
 from app.models.enums import ActivityEntityType, TaskStatus
 from app.models.project import ProjectMember
 from app.models.story import Story
@@ -120,6 +121,22 @@ def create_task(
         action="task.created",
         details={"story_id": story.id, "title": task.title, "status": task.status},
     )
+    if task.assignee_id:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": task.assignee_id,
+                "project_id": story.project_id,
+                "type": "task.assigned",
+                "title": f"Assigned task: {task.title}",
+                "body": f"You were assigned to task '{task.title}'.",
+                "entity_type": ActivityEntityType.TASK.value,
+                "entity_id": task.id,
+            },
+            project_id=story.project_id,
+            created_by=actor_id,
+        )
     db.commit()
     db.refresh(task)
     return to_task_response(task)
@@ -181,6 +198,38 @@ def update_task(
         action="task.updated",
         details=compute_diff(before, after),
     )
+    if task.assignee_id and task.assignee_id != before["assignee_id"]:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": task.assignee_id,
+                "project_id": project_id,
+                "type": "task.assigned",
+                "title": f"Assigned task: {task.title}",
+                "body": f"You were assigned to task '{task.title}'.",
+                "entity_type": ActivityEntityType.TASK.value,
+                "entity_id": task.id,
+            },
+            project_id=project_id,
+            created_by=actor_id,
+        )
+    if task.assignee_id and task.status != before["status"]:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": task.assignee_id,
+                "project_id": project_id,
+                "type": "task.status_changed",
+                "title": f"Task '{task.title}' is now {task.status}",
+                "body": f"Task '{task.title}' changed from {before['status']} to {task.status}.",
+                "entity_type": ActivityEntityType.TASK.value,
+                "entity_id": task.id,
+            },
+            project_id=project_id,
+            created_by=actor_id,
+        )
     db.commit()
     db.refresh(task)
     return to_task_response(task)
@@ -256,6 +305,22 @@ def move_task(
         action="task.moved",
         details=compute_diff(before, {"status": task.status, "position": task.position}),
     )
+    if task.assignee_id and task.status != before["status"]:
+        enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": task.assignee_id,
+                "project_id": project_id,
+                "type": "task.status_changed",
+                "title": f"Task '{task.title}' is now {task.status}",
+                "body": f"Task '{task.title}' changed from {before['status']} to {task.status}.",
+                "entity_type": ActivityEntityType.TASK.value,
+                "entity_id": task.id,
+            },
+            project_id=project_id,
+            created_by=actor_id,
+        )
     db.commit()
     db.refresh(task)
     return to_task_response(task)
