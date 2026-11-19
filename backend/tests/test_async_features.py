@@ -1,0 +1,334 @@
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.jobs.worker import process_next_job, schedule_due_soon_reminders
+from app.models.enums import JobStatus
+from app.services.mailer import ConsoleMailer, set_mailer
+from app.services.report_service import set_report_failure_hook
+
+
+class _RecordingMailer:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, str]] = []
+
+    def send(self, *, to_email: str, subject: str, body: str) -> None:
+        self.sent.append({"to": to_email, "subject": subject, "body": body})
+
+
+def _auth(client: TestClient, email: str, name: str) -> tuple[dict, dict[str, str]]:
+    reg = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "name": name, "password": "StrongPassword123"},
+    )
+    assert reg.status_code == 201
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "StrongPassword123"},
+    )
+    assert login.status_code == 200
+    return reg.json(), {"X-CSRF-Token": login.json()["csrf_token"]}
+
+
+def _drain_worker(db_session_factory: sessionmaker[Session], now: datetime | None = None) -> int:
+    processed = 0
+    while True:
+        with db_session_factory() as db:
+            job = process_next_job(db, "test-worker", now=now, rng=lambda: 0.0)
+            if job is None:
+                break
+            processed += 1
+    return processed
+
+
+def test_assign_and_status_change_enqueue_notifications_and_mailer(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    mailer = _RecordingMailer()
+    set_mailer(mailer)
+    try:
+        user, headers = _auth(client, "notify@example.com", "Notify User")
+        project_id = client.post(
+            "/api/v1/projects",
+            json={"key": "NTF", "name": "Notify Project"},
+            headers=headers,
+        ).json()["id"]
+        story_id = client.post(
+            f"/api/v1/projects/{project_id}/stories",
+            json={"title": "Notification Story"},
+            headers=headers,
+        ).json()["id"]
+
+        task = client.post(
+            f"/api/v1/stories/{story_id}/tasks",
+            json={"title": "Wire SSE", "assignee_id": user["id"]},
+            headers=headers,
+        ).json()
+        client.patch(
+            f"/api/v1/tasks/{task['id']}",
+            json={"status": "doing", "version": 1},
+            headers=headers,
+        )
+
+        assert _drain_worker(db_session_factory) == 2
+        assert len(mailer.sent) == 2
+        assert mailer.sent[0]["to"] == "notify@example.com"
+
+        listing = client.get("/api/v1/notifications").json()
+        assert listing["unread_count"] == 2
+        assert len(listing["items"]) == 2
+        types = {item["type"] for item in listing["items"]}
+        assert types == {"task.assigned", "task.status_changed"}
+
+        first_id = listing["items"][0]["id"]
+        mark_one = client.patch(f"/api/v1/notifications/{first_id}/read", headers=headers)
+        assert mark_one.status_code == 200
+        assert mark_one.json()["read_at"] is not None
+
+        assert client.get("/api/v1/notifications").json()["unread_count"] == 1
+
+        mark_all = client.post("/api/v1/notifications/read-all", headers=headers)
+        assert mark_all.status_code == 200
+        assert mark_all.json()["updated"] == 1
+        assert client.get("/api/v1/notifications").json()["unread_count"] == 0
+    finally:
+        set_mailer(ConsoleMailer())
+
+
+def test_sse_stream_requires_auth_and_supports_reconnect_last_event_id(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    # Unauthenticated SSE rejected with 401
+    unauth = client.get("/api/v1/notifications/stream?once=true")
+    assert unauth.status_code == 401
+
+    user, headers = _auth(client, "sse@example.com", "SSE User")
+    project_id = client.post(
+        "/api/v1/projects",
+        json={"key": "SSE", "name": "SSE Project"},
+        headers=headers,
+    ).json()["id"]
+    story_id = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={"title": "Stream Story"},
+        headers=headers,
+    ).json()["id"]
+
+    # Trigger first notification
+    t1 = client.post(
+        f"/api/v1/stories/{story_id}/tasks",
+        json={"title": "First Task", "assignee_id": user["id"]},
+        headers=headers,
+    ).json()
+    assert _drain_worker(db_session_factory) == 1
+
+    stream1 = client.get("/api/v1/notifications/stream?once=true")
+    assert stream1.status_code == 200
+    assert stream1.headers["content-type"].startswith("text/event-stream")
+    body1 = stream1.text
+    assert "event: notification" in body1
+    assert "First Task" in body1
+    assert ": heartbeat" in body1
+
+    first_event_id = next(
+        line.removeprefix("id: ").strip()
+        for line in body1.splitlines()
+        if line.startswith("id: ")
+    )
+
+    # Trigger second notification and reconnect with Last-Event-ID
+    client.patch(
+        f"/api/v1/tasks/{t1['id']}",
+        json={"status": "done", "version": 1},
+        headers=headers,
+    )
+    assert _drain_worker(db_session_factory) == 1
+
+    stream2 = client.get(
+        "/api/v1/notifications/stream?once=true",
+        headers={"Last-Event-ID": first_event_id},
+    )
+    assert stream2.status_code == 200
+    body2 = stream2.text
+    assert "is now done" in body2
+    assert "Assigned task: First Task" not in body2
+
+
+def test_due_soon_reminder_scheduler_and_deduplication(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    user, headers = _auth(client, "due@example.com", "Due User")
+    project_id = client.post(
+        "/api/v1/projects",
+        json={"key": "DUE", "name": "Due Soon Project"},
+        headers=headers,
+    ).json()["id"]
+    story_id = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={"title": "Deadlines"},
+        headers=headers,
+    ).json()["id"]
+
+    today = date(2026, 11, 20)
+    tomorrow = today + timedelta(days=1)
+    later = today + timedelta(days=5)
+
+    # Task due within 24h (should notify)
+    client.post(
+        f"/api/v1/stories/{story_id}/tasks",
+        json={
+            "title": "Submit PR",
+            "assignee_id": user["id"],
+            "due_date": tomorrow.isoformat(),
+        },
+        headers=headers,
+    )
+    # Done task due tomorrow (should NOT notify)
+    client.post(
+        f"/api/v1/stories/{story_id}/tasks",
+        json={
+            "title": "Already Finished",
+            "status": "done",
+            "assignee_id": user["id"],
+            "due_date": tomorrow.isoformat(),
+        },
+        headers=headers,
+    )
+    # Task due in 5 days (should NOT notify)
+    client.post(
+        f"/api/v1/stories/{story_id}/tasks",
+        json={
+            "title": "Future Task",
+            "assignee_id": user["id"],
+            "due_date": later.isoformat(),
+        },
+        headers=headers,
+    )
+    # Drain the initial task.assigned notifications first
+    _drain_worker(db_session_factory)
+
+    run_time = datetime(2026, 11, 20, 10, 0, 0, tzinfo=UTC)
+    with db_session_factory() as db:
+        sched1 = schedule_due_soon_reminders(db, now=run_time)
+        sched2 = schedule_due_soon_reminders(db, now=run_time + timedelta(minutes=15))
+        assert sched1.id == sched2.id
+
+    # Process due_soon_reminder + resulting send_notification
+    assert _drain_worker(db_session_factory, now=run_time) == 2
+
+    # Schedule in next hour on the same day -> reminder job runs, but task+day dedupe prevents dup
+    next_hour = run_time + timedelta(hours=1)
+    with db_session_factory() as db:
+        sched3 = schedule_due_soon_reminders(db, now=next_hour)
+        assert sched3.id != sched1.id
+
+    # Only due_soon_reminder runs; send_notification is deduped by due_soon:<task_id>:<day>
+    assert _drain_worker(db_session_factory, now=next_hour) == 1
+
+    notifs = client.get("/api/v1/notifications").json()["items"]
+    due_notifs = [n for n in notifs if n["type"] == "task.due_soon"]
+    assert len(due_notifs) == 1
+    assert "Submit PR" in due_notifs[0]["title"]
+
+
+def test_report_generation_idempotency_injectable_failure_retry_and_download(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    _user, headers = _auth(client, "rep@example.com", "Report User")
+    project_id = client.post(
+        "/api/v1/projects",
+        json={"key": "REP", "name": "Reporting Project"},
+        headers=headers,
+    ).json()["id"]
+    story_id = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={"title": "Release Prep", "status": "in_progress"},
+        headers=headers,
+    ).json()["id"]
+    client.post(
+        f"/api/v1/stories/{story_id}/tasks",
+        json={"title": "Fix blocker", "status": "blocked", "due_date": "2020-01-01"},
+        headers=headers,
+    )
+    client.post(
+        f"/api/v1/stories/{story_id}/tasks",
+        json={"title": "Ship docs", "status": "done"},
+        headers=headers,
+    )
+
+    # Request report with Idempotency-Key -> 202
+    req1 = client.post(
+        f"/api/v1/projects/{project_id}/reports",
+        headers={**headers, "Idempotency-Key": "sprint-review-1"},
+    )
+    assert req1.status_code == 202
+    job_id = req1.json()["job_id"]
+    assert req1.json()["status"] == "queued"
+
+    # Duplicate Idempotency-Key returns same job_id
+    req2 = client.post(
+        f"/api/v1/projects/{project_id}/reports",
+        headers={**headers, "Idempotency-Key": "sprint-review-1"},
+    )
+    assert req2.status_code == 202
+    assert req2.json()["job_id"] == job_id
+
+    # Inject a transient failure on first attempt to verify automatic retry
+    attempts = {"count": 0}
+
+    def fail_once(_payload: dict[str, Any]) -> None:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("transient report renderer error")
+
+    set_report_failure_hook(fail_once)
+    t0 = datetime.now(UTC) + timedelta(seconds=1)
+    try:
+        with db_session_factory() as db:
+            j1 = process_next_job(db, "report-worker", now=t0, rng=lambda: 0.0)
+            assert j1 is not None
+            assert j1.id == job_id
+            assert j1.status == JobStatus.QUEUED.value
+            assert j1.attempts == 1
+
+        with db_session_factory() as db:
+            j2 = process_next_job(
+                db,
+                "report-worker",
+                now=t0 + timedelta(seconds=10),
+                rng=lambda: 0.0,
+            )
+            assert j2 is not None
+            assert j2.id == job_id
+            assert j2.status == JobStatus.SUCCEEDED.value
+            assert j2.attempts == 2
+    finally:
+        set_report_failure_hook(None)
+
+    # Job status endpoint exposes report_id in result
+    job_status = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert job_status["status"] == "succeeded"
+    report_id = job_status["result"]["report_id"]
+
+    # List reports
+    reports_list = client.get(f"/api/v1/projects/{project_id}/reports").json()
+    assert len(reports_list["items"]) == 1
+    assert reports_list["items"][0]["id"] == report_id
+
+    # Download Markdown report
+    download = client.get(f"/api/v1/reports/{report_id}")
+    assert download.status_code == 200
+    assert download.headers["content-type"].startswith("text/markdown")
+    md = download.text
+    assert "# REP Status Report" in md
+    assert "Release Prep" in md
+    assert "Fix blocker" in md
+    assert "## Blocked Items" in md
+    assert "## Overdue Tasks" in md
+    assert "## Recent Activity" in md
