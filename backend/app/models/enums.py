@@ -29,7 +29,7 @@ class TaskStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
-    PENDING = "pending"
+    QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
