@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     csrf_header_name: str = "X-CSRF-Token"
     login_rate_limit_max_attempts: int = 5
     login_rate_limit_window_seconds: int = 60
+    max_request_body_bytes: int = 1_048_576
 
     @field_validator("cors_origins", mode="before")
     @classmethod

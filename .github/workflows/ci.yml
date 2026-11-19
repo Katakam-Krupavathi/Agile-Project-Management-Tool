@@ -25,10 +25,13 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" pip-audit
 
       - name: Lint with ruff
         run: ruff check .
+
+      - name: Audit Python dependencies
+        run: pip-audit --desc=off
 
       - name: Test with pytest
         run: pytest -v
@@ -52,6 +55,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
 
       - name: Lint with ESLint
         run: npm run lint

@@ -91,3 +91,29 @@ def test_sliding_window_rate_limiter_enforces_and_expires() -> None:
 
     now[0] += 61.0
     assert limiter.check("ip:user", max_attempts=2, window_seconds=60) is None
+
+
+def test_security_headers_and_request_size_limit() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    with TestClient(create_app()) as client:
+        res = client.get("/api/v1/health")
+        assert res.status_code == 200
+        assert res.headers["x-content-type-options"] == "nosniff"
+        assert res.headers["x-frame-options"] == "DENY"
+        assert res.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+        assert "default-src 'none'" in res.headers["content-security-policy"]
+
+        oversized = client.post(
+            "/api/v1/auth/login",
+            content=b"x" * 16,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(2 * 1024 * 1024),
+            },
+        )
+        assert oversized.status_code == 413
+        assert oversized.headers["content-type"].startswith("application/problem+json")
+        assert oversized.json()["code"] == "PAYLOAD_TOO_LARGE"
