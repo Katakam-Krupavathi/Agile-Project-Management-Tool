@@ -1,7 +1,7 @@
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import BadRequestError
+from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
 from app.models.enums import TaskStatus
 from app.models.project import ProjectMember
@@ -119,6 +119,12 @@ def update_task(
     project_id: str,
     payload: TaskUpdateRequest,
 ) -> TaskResponse:
+    if task.version != payload.version:
+        raise ConflictError(
+            "Task has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     if "assignee_id" in payload.model_fields_set:
         _validate_assignee(db, project_id, payload.assignee_id)
         task.assignee_id = payload.assignee_id
@@ -145,6 +151,11 @@ def move_task(
     task: Task,
     payload: TaskMoveRequest,
 ) -> TaskResponse:
+    if payload.version is not None and task.version != payload.version:
+        raise ConflictError(
+            "Task has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
     if payload.before_id == task.id or payload.after_id == task.id:
         raise BadRequestError("Cannot position a task relative to itself.", code="INVALID_MOVE")
 

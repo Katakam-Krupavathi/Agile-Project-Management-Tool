@@ -1,7 +1,7 @@
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.core.errors import BadRequestError
+from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
 from app.models.enums import StoryPriority, StoryStatus
 from app.models.project import Project, ProjectMember
@@ -163,6 +163,12 @@ def update_story(
     project: Project,
     payload: StoryUpdateRequest,
 ) -> StoryResponse:
+    if story.version != payload.version:
+        raise ConflictError(
+            "Story has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     if "assignee_id" in payload.model_fields_set:
         _validate_assignee(db, project.id, payload.assignee_id)
         story.assignee_id = payload.assignee_id
@@ -192,6 +198,11 @@ def move_story(
     project: Project,
     payload: StoryMoveRequest,
 ) -> StoryResponse:
+    if payload.version is not None and story.version != payload.version:
+        raise ConflictError(
+            "Story has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
     if payload.before_id == story.id or payload.after_id == story.id:
         raise BadRequestError("Cannot position a story relative to itself.", code="INVALID_MOVE")
 

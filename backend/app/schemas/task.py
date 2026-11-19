@@ -29,7 +29,7 @@ class TaskUpdateRequest(BaseModel):
     assignee_id: str | None = Field(default=None, max_length=36)
     estimate_hours: float | None = Field(default=None, ge=0.0, le=1000.0)
     due_date: date | None = None
-    version: int | None = Field(default=None, ge=1)
+    version: int = Field(ge=1)
 
     @field_validator("title")
     @classmethod

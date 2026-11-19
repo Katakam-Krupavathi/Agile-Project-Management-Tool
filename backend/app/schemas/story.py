@@ -31,7 +31,7 @@ class StoryUpdateRequest(BaseModel):
     priority: StoryPriority | None = None
     story_points: int | None = Field(default=None, ge=0, le=100)
     assignee_id: str | None = Field(default=None, max_length=36)
-    version: int | None = Field(default=None, ge=1)
+    version: int = Field(ge=1)
 
     @field_validator("title")
     @classmethod
