@@ -1,9 +1,11 @@
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Kanban, ListTree } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
-import { Badge, EmptyState, ErrorState, ProgressRail, Skeleton } from '../components/ui';
+import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
+import { OutlineView } from '../components/workspace/OutlineView';
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
+import { useProjectMembers } from '../hooks/useWorkspace';
 
 export type WorkspaceViewMode = 'outline' | 'board';
 
@@ -15,10 +17,12 @@ export function ProjectDetailPage() {
   const logout = useLogout();
   const { data: projectsPage } = useProjects(Boolean(user));
   const { data: tree, isLoading, isError, error, refetch } = useProjectTree(projectId);
+  const { data: membersPage } = useProjectMembers(projectId);
 
   if (!user) return null;
 
   const projects = projectsPage?.items ?? [];
+  const members = membersPage?.items ?? [];
   const rawView = searchParams.get('view');
   const viewMode: WorkspaceViewMode = rawView === 'board' ? 'board' : 'outline';
 
@@ -111,36 +115,7 @@ export function ProjectDetailPage() {
             </div>
           </section>
 
-          {tree.stories.length === 0 ? (
-            <EmptyState
-              title="No stories yet"
-              description="Add user stories to start tracking work in Outline or Board view."
-            />
-          ) : (
-            <div className="space-y-2">
-              {tree.stories.map((node) => (
-                <div
-                  key={node.story.id}
-                  className="flex items-center justify-between gap-4 rounded border border-neutral-200 bg-neutral-0 px-4 py-3"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="font-mono text-xs font-semibold text-brand">
-                      {node.story.key}
-                    </span>
-                    <span className="truncate text-sm font-medium text-neutral-900">
-                      {node.story.title}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Badge variant="neutral">{node.story.status.replace('_', ' ')}</Badge>
-                    <div className="w-28">
-                      <ProgressRail value={node.rollup.progress_pct} />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <OutlineView stories={tree.stories} members={members} />
         </div>
       )}
     </AppShell>
