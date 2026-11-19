@@ -1,8 +1,16 @@
+from datetime import date, timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.jobs.queue import enqueue_job
 from app.jobs.registry import register
+from app.models.enums import ActivityEntityType, TaskStatus
+from app.models.project import Project
+from app.models.story import Story
+from app.models.task import Task
+from app.models.user import utc_now
 from app.services import notification_service
 
 
@@ -20,3 +28,57 @@ def handle_send_notification(db: Session, payload: dict[str, Any]) -> dict[str, 
         send_email=True,
     )
     return {"notification_id": notification.id}
+
+
+@register("due_soon_reminder")
+def handle_due_soon_reminder(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    ref_raw = payload.get("reference_date")
+    reference_day = date.fromisoformat(ref_raw) if isinstance(ref_raw, str) else utc_now().date()
+    horizon_day = reference_day + timedelta(days=1)
+
+    rows = db.execute(
+        select(Task, Story, Project)
+        .join(Story, Story.id == Task.story_id)
+        .join(Project, Project.id == Story.project_id)
+        .where(
+            Task.deleted_at.is_(None),
+            Story.deleted_at.is_(None),
+            Project.deleted_at.is_(None),
+            Task.status != TaskStatus.DONE.value,
+            Task.assignee_id.is_not(None),
+            Task.due_date.is_not(None),
+            Task.due_date >= reference_day,
+            Task.due_date <= horizon_day,
+        )
+    ).all()
+
+    enqueued_job_ids: list[str] = []
+    for task, story, project in rows:
+        if task.assignee_id is None or task.due_date is None:
+            continue
+        dedupe_key = f"due_soon:{task.id}:{reference_day.isoformat()}"
+        job = enqueue_job(
+            db,
+            "send_notification",
+            {
+                "user_id": task.assignee_id,
+                "project_id": project.id,
+                "type": "task.due_soon",
+                "title": f"Task due soon: {task.title}",
+                "body": (
+                    f"Task '{task.title}' in {project.key}-{story.number} "
+                    f"is due on {task.due_date.isoformat()}."
+                ),
+                "entity_type": ActivityEntityType.TASK.value,
+                "entity_id": task.id,
+            },
+            project_id=project.id,
+            idempotency_key=dedupe_key,
+        )
+        enqueued_job_ids.append(job.id)
+
+    return {
+        "reference_date": reference_day.isoformat(),
+        "matched_tasks": len(rows),
+        "notification_job_ids": enqueued_job_ids,
+    }

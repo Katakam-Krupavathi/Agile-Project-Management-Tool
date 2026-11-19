@@ -13,6 +13,8 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import SessionLocal
+from app.jobs import handlers as _handlers  # noqa: F401
+from app.jobs.queue import enqueue_job
 from app.jobs.registry import get_handler
 from app.models.enums import JobStatus
 from app.models.job import Job
@@ -256,6 +258,25 @@ def recover_stuck_jobs(
     return len(stuck_jobs)
 
 
+def schedule_due_soon_reminders(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> Job:
+    """Schedule the hourly due_soon_reminder scan idempotently."""
+    reference_now = now or utc_now()
+    hour_bucket = reference_now.strftime("%Y-%m-%dT%H")
+    job = enqueue_job(
+        db,
+        "due_soon_reminder",
+        {"reference_date": reference_now.date().isoformat()},
+        idempotency_key=f"schedule:due_soon_reminder:{hour_bucket}",
+        run_at=reference_now,
+    )
+    db.commit()
+    return job
+
+
 class Worker:
     def __init__(
         self,
@@ -278,6 +299,10 @@ class Worker:
         with self.session_factory() as db:
             return recover_stuck_jobs(db, lock_timeout_seconds=self.lock_timeout_seconds)
 
+    def schedule_once(self) -> Job:
+        with self.session_factory() as db:
+            return schedule_due_soon_reminders(db)
+
     def run_once(self) -> Job | None:
         with self.session_factory() as db:
             return process_next_job(db, self.worker_id)
@@ -286,6 +311,7 @@ class Worker:
         _log_event(logging.INFO, "worker.started", worker_id=self.worker_id)
         while not self._stop_event.is_set():
             self.recover_once()
+            self.schedule_once()
             processed = self.run_once()
             if processed is None:
                 self._stop_event.wait(self.poll_interval_seconds)
