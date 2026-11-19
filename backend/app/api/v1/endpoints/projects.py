@@ -8,7 +8,13 @@ from app.db.session import get_db
 from app.models.enums import ProjectRole
 from app.models.user import User
 from app.schemas.common import CursorPage
-from app.schemas.project import ProjectCreateRequest, ProjectResponse, ProjectUpdateRequest
+from app.schemas.project import (
+    ProjectCreateRequest,
+    ProjectMemberCreateRequest,
+    ProjectMemberResponse,
+    ProjectResponse,
+    ProjectUpdateRequest,
+)
 from app.services import project_service
 from app.services.permissions import ProjectAccess, require_project_role
 
@@ -75,3 +81,46 @@ def archive_project(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     project_service.archive_project(db, access.project, access.user.id)
+
+
+@router.get("/{project_id}/members", response_model=CursorPage[ProjectMemberResponse])
+def list_members(
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.VIEWER))],
+    db: Annotated[Session, Depends(get_db)],
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> CursorPage[ProjectMemberResponse]:
+    items, next_cursor, has_more = project_service.list_project_members(
+        db,
+        access.project.id,
+        cursor=cursor,
+        limit=limit,
+    )
+    return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)
+
+
+@router.post(
+    "/{project_id}/members",
+    response_model=ProjectMemberResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_csrf)],
+)
+def add_member(
+    payload: ProjectMemberCreateRequest,
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.OWNER))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProjectMemberResponse:
+    return project_service.add_project_member(db, access.project, payload, access.user.id)
+
+
+@router.delete(
+    "/{project_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_csrf)],
+)
+def remove_member(
+    user_id: str,
+    access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.OWNER))],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    project_service.remove_project_member(db, access.project, user_id, access.user.id)

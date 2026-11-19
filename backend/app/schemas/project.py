@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models.enums import ProjectRole
 
@@ -60,3 +60,20 @@ class ProjectResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+
+
+class ProjectMemberCreateRequest(BaseModel):
+    email: EmailStr = Field(max_length=255)
+    role: ProjectRole = ProjectRole.MEMBER
+
+
+class ProjectMemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    user_id: str
+    email: EmailStr
+    name: str
+    role: ProjectRole
+    created_at: datetime
