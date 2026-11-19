@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, projectsApi, storiesApi, tasksApi } from '../lib/api';
-import type { StoryPriority, StoryStatus, TaskStatus } from '../lib/types';
+import type { ProjectTree, StoryPriority, StoryStatus, TaskStatus } from '../lib/types';
 import { useToast } from '../components/ui';
 import { projectTreeKey } from './useProjects';
 
@@ -97,12 +97,47 @@ export function useMoveStory(projectId: string) {
         version?: number;
       };
     }) => storiesApi.move(storyId, payload),
-    onSuccess: () => {
+    onMutate: async ({ storyId, payload }) => {
+      const key = projectTreeKey(projectId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<ProjectTree>(key);
+
+      if (previous) {
+        const movingNode = previous.stories.find((n) => n.story.id === storyId);
+        if (movingNode) {
+          const updatedNode = {
+            ...movingNode,
+            story: { ...movingNode.story, status: payload.status },
+          };
+          const remaining = previous.stories.filter((n) => n.story.id !== storyId);
+          let insertIdx = remaining.length;
+          if (payload.after_id) {
+            const idx = remaining.findIndex((n) => n.story.id === payload.after_id);
+            if (idx !== -1) insertIdx = idx;
+          } else if (payload.before_id) {
+            const idx = remaining.findIndex((n) => n.story.id === payload.before_id);
+            if (idx !== -1) insertIdx = idx + 1;
+          }
+          const nextStories = [...remaining];
+          nextStories.splice(insertIdx, 0, updatedNode);
+          queryClient.setQueryData<ProjectTree>(key, {
+            ...previous,
+            stories: nextStories,
+          });
+        }
+      }
+
+      return { previous };
+    },
+    onError: (err, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(projectTreeKey(projectId), context.previous);
+      }
+      pushToast(err instanceof ApiError ? err.detail : 'Failed to move story.', 'error');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: projectTreeKey(projectId) });
       queryClient.invalidateQueries({ queryKey: projectActivityKey(projectId) });
-    },
-    onError: (err) => {
-      pushToast(err instanceof ApiError ? err.detail : 'Failed to move story.', 'error');
     },
   });
 }

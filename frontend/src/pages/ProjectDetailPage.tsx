@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Kanban, ListTree } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { Badge, ErrorState, ProgressRail, Skeleton } from '../components/ui';
+import { BoardView } from '../components/workspace/BoardView';
 import { OutlineView } from '../components/workspace/OutlineView';
 import { QuickAddBar } from '../components/workspace/QuickAddBar';
 import {
@@ -14,6 +15,7 @@ import { useProjects, useProjectTree } from '../hooks/useProjects';
 import {
   useCreateStory,
   useCreateTask,
+  useMoveStory,
   useProjectMembers,
   useUpdateStory,
   useUpdateTask,
@@ -32,6 +34,7 @@ export function ProjectDetailPage() {
   const { data: membersPage } = useProjectMembers(projectId);
   const createStory = useCreateStory(projectId ?? '');
   const updateStory = useUpdateStory(projectId ?? '');
+  const moveStory = useMoveStory(projectId ?? '');
   const createTask = useCreateTask(projectId ?? '');
   const updateTask = useUpdateTask(projectId ?? '');
   const [filters, setFilters] = useState<WorkspaceFilterState>({
@@ -192,26 +195,40 @@ export function ProjectDetailPage() {
 
           <WorkspaceFilters value={filters} members={members} onChange={setFilters} />
 
-          <OutlineView
-            stories={filteredStories}
-            members={members}
-            canEdit={canEdit}
-            onUpdateStory={(story, patch) =>
-              updateStory.mutate({
-                storyId: story.id,
-                payload: { ...patch, version: story.version },
-              })
-            }
-            onCreateTask={async (storyId, title) => {
-              await createTask.mutateAsync({ storyId, payload: { title } });
-            }}
-            onUpdateTask={(task, patch) =>
-              updateTask.mutate({
-                taskId: task.id,
-                payload: { ...patch, version: task.version },
-              })
-            }
-          />
+          {viewMode === 'outline' ? (
+            <OutlineView
+              stories={filteredStories}
+              members={members}
+              canEdit={canEdit}
+              onUpdateStory={(story, patch) =>
+                updateStory.mutate({
+                  storyId: story.id,
+                  payload: { ...patch, version: story.version },
+                })
+              }
+              onCreateTask={async (storyId, title) => {
+                await createTask.mutateAsync({ storyId, payload: { title } });
+              }}
+              onUpdateTask={(task, patch) =>
+                updateTask.mutate({
+                  taskId: task.id,
+                  payload: { ...patch, version: task.version },
+                })
+              }
+            />
+          ) : (
+            <BoardView
+              stories={filteredStories}
+              members={members}
+              canEdit={canEdit}
+              onMoveStory={(story, target) =>
+                moveStory.mutate({
+                  storyId: story.id,
+                  payload: { ...target, version: story.version },
+                })
+              }
+            />
+          )}
         </div>
       )}
     </AppShell>
