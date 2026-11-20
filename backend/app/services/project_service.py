@@ -10,6 +10,8 @@ from app.db.session import begin_immediate_if_sqlite
 from app.models.activity import ActivityLog
 from app.models.enums import ActivityEntityType, ProjectRole
 from app.models.project import Project, ProjectMember
+from app.models.story import Story
+from app.models.task import Task
 from app.models.user import User, utc_now
 from app.schemas.project import (
     ProjectCreateRequest,
@@ -374,6 +376,68 @@ def remove_project_member(
 
     membership_id = membership.id
     removed_role = membership.role
+    now = utc_now()
+
+    assigned_stories = list(
+        db.scalars(
+            select(Story).where(
+                Story.project_id == project.id,
+                Story.assignee_id == target_user_id,
+                Story.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    for story in assigned_stories:
+        story.assignee_id = None
+        story.version += 1
+        story.updated_at = now
+        db.add(
+            ActivityLog(
+                project_id=project.id,
+                actor_id=actor_id,
+                entity_type=ActivityEntityType.STORY.value,
+                entity_id=story.id,
+                action="story.updated",
+                details=json.dumps(
+                    {
+                        "assignee_id": {"from": target_user_id, "to": None},
+                        "reason": "member_removed",
+                    }
+                ),
+            )
+        )
+
+    assigned_tasks = list(
+        db.scalars(
+            select(Task)
+            .join(Story, Story.id == Task.story_id)
+            .where(
+                Story.project_id == project.id,
+                Task.assignee_id == target_user_id,
+                Task.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    for task in assigned_tasks:
+        task.assignee_id = None
+        task.version += 1
+        task.updated_at = now
+        db.add(
+            ActivityLog(
+                project_id=project.id,
+                actor_id=actor_id,
+                entity_type=ActivityEntityType.TASK.value,
+                entity_id=task.id,
+                action="task.updated",
+                details=json.dumps(
+                    {
+                        "assignee_id": {"from": target_user_id, "to": None},
+                        "reason": "member_removed",
+                    }
+                ),
+            )
+        )
+
     db.delete(membership)
     db.add(
         ActivityLog(

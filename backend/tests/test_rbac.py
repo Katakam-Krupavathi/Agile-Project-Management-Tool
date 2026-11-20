@@ -330,3 +330,95 @@ def test_last_owner_protection_and_member_edge_cases(
         )
         assert sole_remove2.status_code == 409
         assert sole_remove2.json()["code"] == "LAST_OWNER_CANNOT_BE_REMOVED"
+
+
+def test_removing_member_unassigns_work_and_skips_pending_notifications(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    import json
+
+    from app.jobs.worker import process_next_job
+
+    with (
+        _user_client(db_session_factory, "rm_owner@example.com", "RM Owner") as (
+            owner_client,
+            _owner_user,
+            owner_headers,
+        ),
+        _user_client(db_session_factory, "rm_member@example.com", "RM Member") as (
+            member_client,
+            member_user,
+            _member_headers,
+        ),
+    ):
+        proj_res = owner_client.post(
+            "/api/v1/projects",
+            json={"key": "RMV", "name": "Removal Project"},
+            headers=owner_headers,
+        )
+        assert proj_res.status_code == 201
+        project_id = proj_res.json()["id"]
+
+        add_res = owner_client.post(
+            f"/api/v1/projects/{project_id}/members",
+            json={"email": "rm_member@example.com", "role": "member"},
+            headers=owner_headers,
+        )
+        assert add_res.status_code == 201
+
+        story = owner_client.post(
+            f"/api/v1/projects/{project_id}/stories",
+            json={"title": "Assigned Story", "assignee_id": member_user["id"]},
+            headers=owner_headers,
+        ).json()
+        task = owner_client.post(
+            f"/api/v1/stories/{story['id']}/tasks",
+            json={"title": "Assigned Task", "assignee_id": member_user["id"]},
+            headers=owner_headers,
+        ).json()
+
+        # Remove member before worker drains the queued send_notification jobs
+        rm_res = owner_client.delete(
+            f"/api/v1/projects/{project_id}/members/{member_user['id']}",
+            headers=owner_headers,
+        )
+        assert rm_res.status_code == 204
+
+        # Story and task must be unassigned in the same transaction
+        updated_story = owner_client.get(f"/api/v1/stories/{story['id']}").json()
+        assert updated_story["assignee_id"] is None
+
+        updated_tasks = owner_client.get(f"/api/v1/stories/{story['id']}/tasks").json()["items"]
+        assert updated_tasks[0]["id"] == task["id"]
+        assert updated_tasks[0]["assignee_id"] is None
+
+        # Activity log records unassignment entries for story and task
+        activity_items = owner_client.get(
+            f"/api/v1/projects/{project_id}/activity"
+        ).json()["items"]
+        unassigned_entities = {
+            (item["entity_type"], item["entity_id"])
+            for item in activity_items
+            if item["action"] in ("story.updated", "task.updated")
+        }
+        assert ("story", story["id"]) in unassigned_entities
+        assert ("task", task["id"]) in unassigned_entities
+
+        # Drain queued notification jobs -> skipped because user is no longer a project member
+        results: list[dict] = []
+        while True:
+            with db_session_factory() as db:
+                job = process_next_job(db, "rm-worker", rng=lambda: 0.0)
+                if job is None:
+                    break
+                assert job.status == "succeeded"
+                if job.result:
+                    results.append(json.loads(job.result))
+
+        assert len(results) == 2
+        assert all(r.get("skipped") is True for r in results)
+
+        # Removed member received zero notifications
+        member_notifs = member_client.get("/api/v1/notifications").json()
+        assert member_notifs["unread_count"] == 0
+        assert member_notifs["items"] == []

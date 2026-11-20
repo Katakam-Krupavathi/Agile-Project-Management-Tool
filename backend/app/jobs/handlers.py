@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.jobs.queue import enqueue_job
 from app.jobs.registry import register
 from app.models.enums import ActivityEntityType, TaskStatus
-from app.models.project import Project
+from app.models.project import Project, ProjectMember
 from app.models.story import Story
 from app.models.task import Task
 from app.models.user import utc_now
@@ -16,10 +16,22 @@ from app.services import notification_service, report_service
 
 @register("send_notification")
 def handle_send_notification(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    user_id = str(payload["user_id"])
+    project_id = payload.get("project_id")
+    if isinstance(project_id, str) and project_id:
+        is_member = db.scalar(
+            select(ProjectMember.id).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == user_id,
+            )
+        )
+        if is_member is None:
+            return {"skipped": True, "reason": "not_project_member"}
+
     notification = notification_service.create_notification(
         db,
-        user_id=str(payload["user_id"]),
-        project_id=payload.get("project_id"),
+        user_id=user_id,
+        project_id=project_id,
         notification_type=str(payload["type"]),
         title=str(payload["title"]),
         body=payload.get("body"),
