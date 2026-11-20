@@ -17,6 +17,7 @@ class TaskRollupInput:
     status: TaskStatus
     estimate_hours: float | None = None
     due_date: date | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,16 @@ def _normalize_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _story_last_activity(story: StoryRollupInput) -> datetime:
+    latest = _normalize_utc(story.updated_at)
+    for task in story.tasks:
+        if task.updated_at is not None:
+            task_ts = _normalize_utc(task.updated_at)
+            if task_ts > latest:
+                latest = task_ts
+    return latest
+
+
 def compute_project_rollup(
     stories: Sequence[StoryRollupInput],
     *,
@@ -130,7 +141,7 @@ def compute_project_rollup(
         1
         for story in stories
         if story.status in (StoryStatus.IN_PROGRESS, StoryStatus.IN_REVIEW)
-        and _normalize_utc(story.updated_at) < stalled_cutoff
+        and _story_last_activity(story) < stalled_cutoff
     )
 
     all_tasks = [task for story in stories for task in story.tasks]

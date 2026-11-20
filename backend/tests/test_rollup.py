@@ -125,3 +125,24 @@ def test_project_health_on_track_at_risk_and_off_track() -> None:
     )
     assert off_track_stalled.health == ProjectHealth.OFF_TRACK
     assert off_track_stalled.stalled_stories == 3
+
+
+def test_stalled_story_not_flagged_when_task_has_recent_activity() -> None:
+    now = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
+    rollup = compute_project_rollup(
+        [
+            StoryRollupInput(
+                status=StoryStatus.IN_PROGRESS,
+                updated_at=now - timedelta(days=14),
+                tasks=[
+                    TaskRollupInput(
+                        status=TaskStatus.DOING,
+                        updated_at=now - timedelta(days=1),
+                    )
+                ],
+            )
+        ],
+        now=now,
+    )
+    assert rollup.stalled_stories == 0
+    assert rollup.health == ProjectHealth.ON_TRACK

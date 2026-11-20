@@ -64,6 +64,7 @@ def get_project_tree(
                 status=TaskStatus(task.status),
                 estimate_hours=task.estimate_hours,
                 due_date=task.due_date,
+                updated_at=task.updated_at,
             )
             for task in story_tasks
         ]
