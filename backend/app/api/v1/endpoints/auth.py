@@ -59,7 +59,11 @@ def login(
         raise
 
     login_rate_limiter.clear(rate_key)
-    session_token = create_session_token(user.id, settings.secret_key)
+    session_token = create_session_token(
+        user.id,
+        settings.secret_key,
+        token_version=user.token_version,
+    )
     csrf_token = generate_csrf_token()
 
     response.set_cookie(
@@ -89,12 +93,15 @@ def login(
 @router.post(
     "/logout",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(get_current_user), Depends(require_csrf)],
+    dependencies=[Depends(require_csrf)],
 )
 def logout(
     response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
+    auth_service.revoke_user_sessions(db, current_user.id)
     response.delete_cookie(
         key=settings.session_cookie_name,
         path="/",

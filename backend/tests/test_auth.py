@@ -166,10 +166,6 @@ def test_login_rate_limiting_returns_429_with_retry_after(client: TestClient) ->
     _assert_problem_envelope(limited.json(), 429, "LOGIN_RATE_LIMITED")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Session revocation via token_version not implemented yet",
-)
 def test_logout_revokes_old_session_cookie_on_replay(client: TestClient) -> None:
     client.post(
         "/api/v1/auth/register",
@@ -201,10 +197,6 @@ def test_logout_revokes_old_session_cookie_on_replay(client: TestClient) -> None
     _assert_problem_envelope(replayed.json(), 401, "INVALID_SESSION")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SSE loop does not re-validate token_version on every poll yet",
-)
 def test_sse_stream_closes_after_logout_revokes_session(
     db_session_factory: sessionmaker[Session],
 ) -> None:

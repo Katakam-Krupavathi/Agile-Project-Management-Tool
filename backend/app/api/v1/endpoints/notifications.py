@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_csrf
+from app.api.deps import get_current_user, is_request_session_valid, require_csrf
 from app.core.config import Settings, get_settings
 from app.db.session import get_db, open_db_session
 from app.models.user import User
@@ -64,13 +64,16 @@ async def stream_notifications(
         max_streams=settings.sse_max_streams_per_user,
     )
 
-    def _poll_events(last_id: str | None) -> list[NotificationResponse]:
+    def _poll_events(last_id: str | None) -> tuple[bool, list[NotificationResponse]]:
         with open_db_session(app) as db:
-            return notification_service.get_notifications_since(
+            if not is_request_session_valid(request, db, settings, user_id):
+                return False, []
+            events = notification_service.get_notifications_since(
                 db,
                 user_id,
                 last_event_id=last_id,
             )
+            return True, events
 
     async def event_generator() -> AsyncGenerator[str, None]:
         nonlocal cursor_event_id
@@ -82,7 +85,9 @@ async def stream_notifications(
                 if await request.is_disconnected():
                     break
 
-                events = await asyncio.to_thread(_poll_events, cursor_event_id)
+                session_ok, events = await asyncio.to_thread(_poll_events, cursor_event_id)
+                if not session_ok:
+                    break
                 for item in events:
                     cursor_event_id = item.id
                     payload_json = item.model_dump_json()

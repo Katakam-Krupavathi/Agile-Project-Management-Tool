@@ -1,9 +1,9 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, UnauthorizedError
 from app.core.security import hash_password, verify_password
-from app.models.user import User
+from app.models.user import User, utc_now
 from app.schemas.auth import RegisterRequest
 
 
@@ -45,3 +45,12 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
 
 def get_active_user_by_id(db: Session, user_id: str) -> User | None:
     return db.scalar(select(User).where(User.id == user_id, User.is_active.is_(True)))
+
+
+def revoke_user_sessions(db: Session, user_id: str) -> None:
+    db.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(token_version=User.token_version + 1, updated_at=utc_now())
+    )
+    db.commit()

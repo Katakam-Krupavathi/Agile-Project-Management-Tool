@@ -20,12 +20,16 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return False
 
 
-def create_session_token(user_id: str, secret_key: str) -> str:
+def create_session_token(user_id: str, secret_key: str, token_version: int = 0) -> str:
     serializer = URLSafeTimedSerializer(secret_key, salt=_SESSION_SALT)
-    return serializer.dumps({"uid": user_id})
+    return serializer.dumps({"uid": user_id, "tv": int(token_version)})
 
 
-def verify_session_token(token: str, secret_key: str, max_age_seconds: int) -> str | None:
+def verify_session_token_payload(
+    token: str,
+    secret_key: str,
+    max_age_seconds: int,
+) -> tuple[str, int] | None:
     serializer = URLSafeTimedSerializer(secret_key, salt=_SESSION_SALT)
     try:
         data = serializer.loads(token, max_age=max_age_seconds)
@@ -34,7 +38,17 @@ def verify_session_token(token: str, secret_key: str, max_age_seconds: int) -> s
     if not isinstance(data, dict):
         return None
     user_id = data.get("uid")
-    return user_id if isinstance(user_id, str) and user_id else None
+    token_version = data.get("tv", 0)
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    if not isinstance(token_version, int) or isinstance(token_version, bool):
+        return None
+    return user_id, token_version
+
+
+def verify_session_token(token: str, secret_key: str, max_age_seconds: int) -> str | None:
+    payload = verify_session_token_payload(token, secret_key, max_age_seconds)
+    return payload[0] if payload is not None else None
 
 
 def generate_csrf_token() -> str:
