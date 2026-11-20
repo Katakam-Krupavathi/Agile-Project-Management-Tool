@@ -26,11 +26,14 @@ def test_migrations_from_empty_db_and_sqlite_pragmas(tmp_path: Path) -> None:
 
     engine = create_db_engine(url)
     try:
+        assert engine.pool._pre_ping is True
         with engine.connect() as conn:
             journal_mode = conn.execute(text("PRAGMA journal_mode;")).scalar_one()
             foreign_keys = conn.execute(text("PRAGMA foreign_keys;")).scalar_one()
+            busy_timeout = conn.execute(text("PRAGMA busy_timeout;")).scalar_one()
             assert str(journal_mode).lower() == "wal"
             assert foreign_keys == 1
+            assert busy_timeout == 5000
 
         inspector = inspect(engine)
         tables = set(inspector.get_table_names())
@@ -89,5 +92,17 @@ def test_db_enforces_foreign_keys_and_check_constraints(tmp_path: Path) -> None:
             with pytest.raises(IntegrityError):
                 session.commit()
             session.rollback()
+
+            # Read-only SELECT does not open a write transaction, whereas write statements
+            # trigger BEGIN IMMEDIATE via the engine event hook.
+            raw_conn = session.connection().connection.dbapi_connection
+            assert raw_conn is not None
+            session.execute(text("SELECT 1"))
+            assert raw_conn.in_transaction is False
+            session.add(User(email="writer@example.com", name="Writer", password_hash="hash"))
+            session.flush()
+            assert raw_conn.in_transaction is True
+            session.commit()
+            assert raw_conn.in_transaction is False
     finally:
         engine.dispose()

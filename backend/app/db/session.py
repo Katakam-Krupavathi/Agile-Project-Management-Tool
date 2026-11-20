@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Connection, Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -18,7 +18,15 @@ def _ensure_sqlite_parent_dir(database_url: str) -> None:
     Path(raw_path).parent.mkdir(parents=True, exist_ok=True)
 
 
+_SQLITE_WRITE_TOKENS = frozenset(
+    {"INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP"}
+)
+
+
 def _configure_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
+    # Disable pysqlite's implicit DEFERRED BEGIN so the engine event hook can
+    # issue BEGIN IMMEDIATE specifically when a write statement starts.
+    dbapi_connection.isolation_level = None
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA journal_mode=WAL;")
@@ -28,15 +36,42 @@ def _configure_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) ->
         cursor.close()
 
 
+def _sqlite_begin_immediate_on_write(
+    _conn: Connection,
+    cursor: Any,
+    statement: str,
+    _parameters: Any,
+    _context: Any,
+    _executemany: bool,
+) -> None:
+    if cursor.connection.in_transaction:
+        return
+    leading = statement.lstrip()
+    if not leading:
+        return
+    first_token = leading.split(None, 1)[0].upper()
+    if first_token in _SQLITE_WRITE_TOKENS or (
+        first_token == "WITH"
+        and any(kw in leading.upper() for kw in ("INSERT ", "UPDATE ", "DELETE "))
+    ):
+        cursor.execute("BEGIN IMMEDIATE")
+
+
 def create_db_engine(database_url: str | None = None) -> Engine:
     url = database_url or get_settings().database_url
     _ensure_sqlite_parent_dir(url)
     connect_args: dict[str, Any] = {}
     if url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
-    engine = create_engine(url, connect_args=connect_args, future=True)
+    engine = create_engine(
+        url,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        future=True,
+    )
     if url.startswith("sqlite"):
         event.listen(engine, "connect", _configure_sqlite_pragmas)
+        event.listen(engine, "before_cursor_execute", _sqlite_begin_immediate_on_write)
     return engine
 
 
@@ -66,15 +101,12 @@ def open_db_session(app: Any = None) -> Generator[Session, None, None]:
 
 
 def begin_immediate_if_sqlite(db: Session) -> None:
-    """Release any read-only snapshot and acquire SQLite's write lock cleanly.
+    """Reset any prior session transaction before a write transaction begins.
 
-    In SQLite WAL mode, upgrading a deferred read transaction to a write
-    transaction fails immediately with SQLITE_BUSY if another writer committed
-    after the snapshot began. Rolling back the read-only transaction and
-    issuing ``BEGIN IMMEDIATE`` honors ``busy_timeout`` and serializes writers
-    without spurious 500s.
+    The SQLite engine's ``before_cursor_execute`` event hook automatically
+    issues ``BEGIN IMMEDIATE`` on the first write statement, acquiring the
+    write lock up front and honoring ``busy_timeout=5000``.
     """
     bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "sqlite":
+    if bind is not None and bind.dialect.name == "sqlite" and db.in_transaction():
         db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
