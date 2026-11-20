@@ -247,7 +247,19 @@ def update_story(
     }
 
     now = utc_now()
+    new_position = story.position
     begin_immediate_if_sqlite(db)
+    if new_status != before["status"]:
+        max_pos = db.scalar(
+            select(func.max(Story.position)).where(
+                Story.project_id == project_id,
+                Story.status == new_status,
+                Story.deleted_at.is_(None),
+                Story.id != story_id,
+            )
+        )
+        new_position = float(max_pos) + RANK_STEP if max_pos is not None else RANK_STEP
+
     result = db.execute(
         update(Story)
         .where(
@@ -263,6 +275,7 @@ def update_story(
             priority=new_priority,
             story_points=new_points,
             assignee_id=new_assignee,
+            position=new_position,
             version=payload.version + 1,
             updated_at=now,
         )

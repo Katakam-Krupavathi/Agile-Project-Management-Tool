@@ -92,3 +92,46 @@ def test_story_crud_numbering_filtering_move_and_delete(client: TestClient) -> N
     deleted = client.delete(f"/api/v1/stories/{s2.json()['id']}", headers=headers)
     assert deleted.status_code == 204
     assert client.get(f"/api/v1/stories/{s2.json()['id']}").status_code == 404
+
+
+def test_patch_story_status_places_story_at_end_of_target_column(client: TestClient) -> None:
+    _user, headers = _auth(client, "reposition@example.com", "Reposition Owner")
+    project_id = client.post(
+        "/api/v1/projects",
+        json={"key": "POS", "name": "Position Project"},
+        headers=headers,
+    ).json()["id"]
+
+    backlog_story = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={"title": "Backlog Story", "status": "backlog"},
+        headers=headers,
+    ).json()
+    in_prog_1 = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={"title": "In Progress 1", "status": "in_progress"},
+        headers=headers,
+    ).json()
+    in_prog_2 = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={"title": "In Progress 2", "status": "in_progress"},
+        headers=headers,
+    ).json()
+
+    patched = client.patch(
+        f"/api/v1/stories/{backlog_story['id']}",
+        json={"status": "in_progress", "version": backlog_story["version"]},
+        headers=headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["status"] == "in_progress"
+    assert patched.json()["position"] > in_prog_2["position"]
+
+    in_prog_items = client.get(
+        f"/api/v1/projects/{project_id}/stories?status=in_progress"
+    ).json()["items"]
+    assert [s["id"] for s in in_prog_items] == [
+        in_prog_1["id"],
+        in_prog_2["id"],
+        backlog_story["id"],
+    ]
