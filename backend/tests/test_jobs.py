@@ -529,3 +529,42 @@ def test_lock_heartbeat_prevents_duplicate_execution_of_slow_handler(
         assert worker.run_maintenance_if_due(now_monotonic=131.0) is True
     finally:
         unregister(job_type)
+
+
+def test_worker_heartbeat_healthcheck_detects_missing_and_stale_heartbeat(
+    db_session_factory: sessionmaker[Session],
+    tmp_path: Any,
+) -> None:
+    from app.jobs.worker import Worker, check_worker_heartbeat
+
+    hb_path = tmp_path / "worker_heartbeat.json"
+    t0 = datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)
+
+    # Missing file -> unhealthy (False)
+    assert check_worker_heartbeat(hb_path, max_age_seconds=30.0, now=t0) is False
+
+    worker = Worker(
+        session_factory=db_session_factory,
+        heartbeat_file=hb_path,
+    )
+    worker.write_heartbeat(now=t0)
+
+    # Fresh heartbeat (10s old <= 30s) -> healthy (True)
+    assert (
+        check_worker_heartbeat(
+            hb_path,
+            max_age_seconds=30.0,
+            now=t0 + timedelta(seconds=10),
+        )
+        is True
+    )
+
+    # Stale heartbeat (31s old > 30s) -> unhealthy (False)
+    assert (
+        check_worker_heartbeat(
+            hb_path,
+            max_age_seconds=30.0,
+            now=t0 + timedelta(seconds=31),
+        )
+        is False
+    )

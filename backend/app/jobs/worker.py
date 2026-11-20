@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
@@ -374,6 +375,52 @@ def schedule_daily_job_cleanup(
     return job
 
 
+def write_worker_heartbeat(
+    heartbeat_file: str | Path | None = None,
+    *,
+    worker_id: str | None = None,
+    now: datetime | None = None,
+) -> Path:
+    """Write a worker liveness heartbeat file on every poll loop."""
+    settings = get_settings()
+    path = Path(heartbeat_file or settings.worker_heartbeat_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    reference_now = now or utc_now()
+    payload = {
+        "worker_id": worker_id or default_worker_id(),
+        "timestamp": reference_now.timestamp(),
+        "updated_at": reference_now.isoformat(),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def check_worker_heartbeat(
+    heartbeat_file: str | Path | None = None,
+    *,
+    max_age_seconds: float | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Return True if the worker heartbeat file exists and is fresher than ``max_age_seconds``."""
+    settings = get_settings()
+    path = Path(heartbeat_file or settings.worker_heartbeat_file)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ts = float(data["timestamp"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    reference_now = now or utc_now()
+    allowed_age = (
+        max_age_seconds
+        if max_age_seconds is not None
+        else settings.worker_heartbeat_max_age_seconds
+    )
+    age = reference_now.timestamp() - ts
+    return age <= allowed_age
+
+
 class Worker:
     def __init__(
         self,
@@ -384,6 +431,7 @@ class Worker:
         lock_timeout_seconds: int = DEFAULT_LOCK_TIMEOUT_SECONDS,
         maintenance_interval_seconds: float | None = None,
         heartbeat_interval_seconds: float | None = None,
+        heartbeat_file: str | Path | None = None,
     ) -> None:
         settings = get_settings()
         self.session_factory = session_factory
@@ -400,11 +448,19 @@ class Worker:
             if heartbeat_interval_seconds is not None
             else settings.worker_lock_heartbeat_interval_seconds
         )
+        self.heartbeat_file = Path(heartbeat_file or settings.worker_heartbeat_file)
         self._last_maintenance_at: float | None = None
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def write_heartbeat(self, *, now: datetime | None = None) -> Path:
+        return write_worker_heartbeat(
+            self.heartbeat_file,
+            worker_id=self.worker_id,
+            now=now,
+        )
 
     def recover_once(self) -> int:
         with self.session_factory() as db:
@@ -443,6 +499,7 @@ class Worker:
     def run_forever(self) -> None:
         _log_event(logging.INFO, "worker.started", worker_id=self.worker_id)
         while not self._stop_event.is_set():
+            self.write_heartbeat()
             self.run_maintenance_if_due()
             processed = self.run_once()
             if processed is None:

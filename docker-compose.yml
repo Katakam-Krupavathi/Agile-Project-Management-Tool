@@ -31,6 +31,8 @@ services:
       APP_ENV: production
       DATABASE_URL: sqlite:////data/agile_pm.db
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env (at least 32 characters)}
+      WORKER_HEARTBEAT_FILE: /data/worker_heartbeat
+      WORKER_HEARTBEAT_MAX_AGE_SECONDS: "30"
       SEED_DEMO: "false"
     volumes:
       - sqlite_data:/data
@@ -38,7 +40,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/data/agile_pm.db'); conn.execute('SELECT 1 FROM jobs LIMIT 1'); conn.close()"]
+      test: ["CMD", "python", "-c", "import sys; from app.jobs.worker import check_worker_heartbeat; sys.exit(0 if check_worker_heartbeat() else 1)"]
       interval: 15s
       timeout: 5s
       retries: 3

@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     job_cleanup_retention_days: int = 7
     worker_maintenance_interval_seconds: float = 30.0
     worker_lock_heartbeat_interval_seconds: float = 60.0
+    worker_heartbeat_file: str = "./data/worker_heartbeat"
+    worker_heartbeat_max_age_seconds: float = 30.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod
