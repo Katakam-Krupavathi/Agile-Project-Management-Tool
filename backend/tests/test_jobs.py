@@ -296,7 +296,7 @@ def test_job_status_and_retry_endpoints_enforce_visibility_and_owner_rbac(
         ),
         _user_client(db_session_factory, "jmember@example.com", "Job Member") as (
             member_client,
-            _member_user,
+            member_user,
             member_headers,
         ),
         _user_client(db_session_factory, "joutsider@example.com", "Job Outsider") as (
@@ -365,3 +365,36 @@ def test_job_status_and_retry_endpoints_enforce_visibility_and_owner_rbac(
         retry_again = owner_client.post(f"/api/v1/jobs/{job_id}/retry", headers=owner_headers)
         assert retry_again.status_code == 409
         assert retry_again.json()["code"] == "JOB_NOT_DEAD"
+
+        # Project-scoped job created by member requires CURRENT project membership
+        with db_session_factory() as db:
+            member_proj_job = enqueue_job(
+                db,
+                "test.member_project_job",
+                {"b": 2},
+                project_id=project_id,
+                created_by=member_user["id"],
+            )
+            member_global_job = enqueue_job(
+                db,
+                "test.member_global_job",
+                {"c": 3},
+                project_id=None,
+                created_by=member_user["id"],
+            )
+            db.commit()
+            member_proj_job_id = member_proj_job.id
+            member_global_job_id = member_global_job.id
+
+        assert member_client.get(f"/api/v1/jobs/{member_proj_job_id}").status_code == 200
+        assert member_client.get(f"/api/v1/jobs/{member_global_job_id}").status_code == 200
+
+        # Remove member from project -> member loses access to project-scoped job they created,
+        # while retaining creator access to non-project job.
+        rm = owner_client.delete(
+            f"/api/v1/projects/{project_id}/members/{member_user['id']}",
+            headers=owner_headers,
+        )
+        assert rm.status_code == 204
+        assert member_client.get(f"/api/v1/jobs/{member_proj_job_id}").status_code == 404
+        assert member_client.get(f"/api/v1/jobs/{member_global_job_id}").status_code == 200

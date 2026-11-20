@@ -43,11 +43,11 @@ def get_job_for_user(db: Session, job_id: str, user: User) -> JobResponse:
     if job is None:
         raise NotFoundError("Job not found.", code="JOB_NOT_FOUND")
 
-    if job.created_by == user.id:
-        return to_job_response(job)
-
     if job.project_id is not None:
         assert_project_role(db, job.project_id, user, ProjectRole.VIEWER)
+        return to_job_response(job)
+
+    if job.created_by == user.id:
         return to_job_response(job)
 
     raise NotFoundError("Job not found.", code="JOB_NOT_FOUND")
