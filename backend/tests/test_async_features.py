@@ -640,3 +640,76 @@ def test_notification_title_truncation_separate_email_job_and_masked_console_mai
     assert "sensitive.person@example.com" not in logged_text
     assert "Status update" in logged_text
     assert "TOP_SECRET_TASK_BODY_CONTENT" not in logged_text
+
+
+def test_report_single_active_job_cooldown_retention_and_user_scoped_idempotency(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    _user, headers = _auth(client, "rep_limit@example.com", "Report Limit User")
+    project_id = client.post(
+        "/api/v1/projects",
+        json={"key": "RPL", "name": "Report Limits Project"},
+        headers=headers,
+    ).json()["id"]
+
+    # 1. First report request creates a queued job
+    r1 = client.post(
+        f"/api/v1/projects/{project_id}/reports",
+        headers={**headers, "Idempotency-Key": "k1"},
+    )
+    assert r1.status_code == 202
+    job_1_id = r1.json()["job_id"]
+
+    # 2. Second report request while one is still active returns the SAME job_id
+    r2 = client.post(
+        f"/api/v1/projects/{project_id}/reports",
+        headers={**headers, "Idempotency-Key": "k2"},
+    )
+    assert r2.status_code == 202
+    assert r2.json()["job_id"] == job_1_id
+
+    # Drain worker so job_1 completes and generates report #1
+    assert _drain_worker(db_session_factory) == 1
+
+    # 3. Immediate request within cooldown (30s default) returns 429 REPORT_COOLDOWN_ACTIVE
+    cooldown_res = client.post(
+        f"/api/v1/projects/{project_id}/reports",
+        headers=headers,
+    )
+    assert cooldown_res.status_code == 429
+    assert cooldown_res.json()["code"] == "REPORT_COOLDOWN_ACTIVE"
+    assert int(cooldown_res.headers["Retry-After"]) >= 1
+
+    # Same user + project + Idempotency-Key "k1" still returns the original job idempotently
+    idem_replay = client.post(
+        f"/api/v1/projects/{project_id}/reports",
+        headers={**headers, "Idempotency-Key": "k1"},
+    )
+    assert idem_replay.status_code == 202
+    assert idem_replay.json()["job_id"] == job_1_id
+
+    # 4. Retention rule: keep only the latest N reports per project (configure N=2, cooldown=0)
+    base_settings = get_settings()
+    custom_settings = base_settings.model_copy(
+        update={
+            "report_cooldown_seconds": 0,
+            "report_retention_max_per_project": 2,
+        }
+    )
+    client.app.dependency_overrides[get_settings] = lambda: custom_settings  # type: ignore[ union-attr ]
+    try:
+        for idx in (2, 3):
+            enq = client.post(
+                f"/api/v1/projects/{project_id}/reports",
+                headers={**headers, "Idempotency-Key": f"ret-{idx}"},
+            )
+            assert enq.status_code == 202
+            with db_session_factory() as db:
+                j = process_next_job(db, "ret-worker", rng=lambda: 0.0)
+                assert j is not None and j.status == JobStatus.SUCCEEDED.value
+
+        reports = client.get(f"/api/v1/projects/{project_id}/reports").json()["items"]
+        assert len(reports) == 2
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)  # type: ignore[ union-attr ]

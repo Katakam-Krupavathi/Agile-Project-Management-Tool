@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     sse_max_streams_per_user: int = 3
     sse_max_lifetime_seconds: float = 1800.0
     sse_poll_interval_seconds: float = 1.0
+    report_cooldown_seconds: int = 30
+    report_retention_max_per_project: int = 20
 
     @field_validator("cors_origins", mode="before")
     @classmethod

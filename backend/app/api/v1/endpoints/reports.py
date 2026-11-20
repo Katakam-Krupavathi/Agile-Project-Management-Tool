@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_csrf
+from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.enums import JobStatus, ProjectRole
 from app.models.user import User
@@ -24,6 +25,7 @@ router = APIRouter(tags=["reports"])
 def enqueue_project_report(
     access: Annotated[ProjectAccess, Depends(require_project_role(ProjectRole.MEMBER))],
     db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=100)] = None,
 ) -> ReportEnqueueResponse:
     job = report_service.request_project_report(
@@ -31,6 +33,8 @@ def enqueue_project_report(
         access.project,
         access.user,
         idempotency_key=idempotency_key,
+        cooldown_seconds=settings.report_cooldown_seconds,
+        retention_max=settings.report_retention_max_per_project,
     )
     return ReportEnqueueResponse(job_id=job.id, status=JobStatus(job.status))
 
