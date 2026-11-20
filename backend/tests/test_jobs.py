@@ -326,15 +326,22 @@ def test_job_status_and_retry_endpoints_enforce_visibility_and_owner_rbac(
             )
             job.status = JobStatus.DEAD.value
             job.attempts = 3
-            job.last_error = "Simulated crash"
+            job.last_error = "RuntimeError: Simulated crash with /internal/secret"
             db.commit()
             job_id = job.id
 
         # Visibility: owner & project member -> 200; outsider -> 404
+        # Full error stays in DB row; API response returns sanitized exception type + generic msg
+        with db_session_factory() as db:
+            stored_job = db.get(Job, job_id)
+            assert stored_job is not None
+            assert "/internal/secret" in (stored_job.last_error or "")
+
         owner_get = owner_client.get(f"/api/v1/jobs/{job_id}")
         assert owner_get.status_code == 200
         assert owner_get.json()["status"] == "dead"
-        assert owner_get.json()["last_error"] == "Simulated crash"
+        assert owner_get.json()["last_error"] == "RuntimeError: Job execution failed."
+        assert "/internal/secret" not in owner_get.json()["last_error"]
 
         assert member_client.get(f"/api/v1/jobs/{job_id}").status_code == 200
         assert outsider_client.get(f"/api/v1/jobs/{job_id}").status_code == 404

@@ -12,6 +12,16 @@ from app.schemas.job import JobResponse
 from app.services.permissions import assert_project_role
 
 
+def sanitize_job_error(raw_error: str | None) -> str | None:
+    if not raw_error:
+        return None
+    prefix, sep, _detail = raw_error.strip().partition(":")
+    exc_type = prefix.strip()
+    if sep and exc_type and exc_type.isidentifier():
+        return f"{exc_type}: Job execution failed."
+    return "JobExecutionError: Job execution failed."
+
+
 def to_job_response(job: Job) -> JobResponse:
     parsed_result: dict[str, Any] | None = None
     if job.result:
@@ -28,7 +38,7 @@ def to_job_response(job: Job) -> JobResponse:
         attempts=job.attempts,
         max_attempts=job.max_attempts,
         run_at=job.run_at,
-        last_error=job.last_error,
+        last_error=sanitize_job_error(job.last_error),
         result=parsed_result,
         project_id=job.project_id,
         created_by=job.created_by,
