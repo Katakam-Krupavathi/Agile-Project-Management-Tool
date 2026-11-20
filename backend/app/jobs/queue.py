@@ -20,7 +20,7 @@ def enqueue_job(
     created_by: str | None = None,
     idempotency_key: str | None = None,
     run_at: datetime | None = None,
-    max_attempts: int = 3,
+    max_attempts: int = 4,
 ) -> Job:
     """Enqueue a durable job inside the caller's active DB transaction.
 

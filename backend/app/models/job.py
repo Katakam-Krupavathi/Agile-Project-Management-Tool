@@ -31,7 +31,7 @@ class Job(Base):
         UTCDateTime(), nullable=False, default=utc_now
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
     locked_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     locked_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

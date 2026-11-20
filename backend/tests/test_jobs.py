@@ -110,11 +110,17 @@ def test_job_becomes_dead_after_max_attempts(
     t = datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)
     try:
         with db_session_factory() as db:
-            job = enqueue_job(db, job_type, {}, run_at=t, max_attempts=3)
+            job = enqueue_job(db, job_type, {}, run_at=t)
             db.commit()
             job_id = job.id
+            assert job.max_attempts == 4
 
-        for step_offset in (0, 10, 50):
+        expected_backoffs = [
+            (0, 1, 10),    # attempt 1 at t+0s   -> retry at t+10s  (+10s)
+            (10, 2, 50),   # attempt 2 at t+10s  -> retry at t+50s  (+40s)
+            (50, 3, 210),  # attempt 3 at t+50s  -> retry at t+210s (+160s)
+        ]
+        for step_offset, expected_attempt, next_offset in expected_backoffs:
             with db_session_factory() as db:
                 res = process_next_job(
                     db,
@@ -123,12 +129,25 @@ def test_job_becomes_dead_after_max_attempts(
                     rng=lambda: 0.0,
                 )
                 assert res is not None
+                assert res.status == JobStatus.QUEUED.value
+                assert res.attempts == expected_attempt
+                assert _as_utc(res.run_at) == t + timedelta(seconds=next_offset)
+
+        # 4th attempt at t+210s exhausts max_attempts=4 -> status 'dead'
+        with db_session_factory() as db:
+            res4 = process_next_job(
+                db,
+                "worker-dead",
+                now=t + timedelta(seconds=210),
+                rng=lambda: 0.0,
+            )
+            assert res4 is not None
 
         with db_session_factory() as db:
             final_job = get_job_by_id(db, job_id)
             assert final_job is not None
             assert final_job.status == JobStatus.DEAD.value
-            assert final_job.attempts == 3
+            assert final_job.attempts == 4
             assert "ValueError: permanent failure" in (final_job.last_error or "")
             assert process_next_job(db, "worker-dead", now=t + timedelta(seconds=500)) is None
     finally:
