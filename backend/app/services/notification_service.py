@@ -199,6 +199,8 @@ def get_notifications_since(
                     ),
                 )
             )
+        else:
+            stmt = stmt.where(Notification.read_at.is_(None))
     else:
         stmt = stmt.where(Notification.read_at.is_(None))
 

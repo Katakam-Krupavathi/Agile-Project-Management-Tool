@@ -167,6 +167,19 @@ def test_sse_stream_requires_auth_and_supports_reconnect_last_event_id(
     assert "is now done" in body2
     assert "Assigned task: First Task" not in body2
 
+    # Mark first notification as read, keep second unread, then pass a missing Last-Event-ID anchor
+    mark_first = client.patch(f"/api/v1/notifications/{first_event_id}/read", headers=headers)
+    assert mark_first.status_code == 200
+
+    stream_missing_anchor = client.get(
+        "/api/v1/notifications/stream?once=true",
+        headers={"Last-Event-ID": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert stream_missing_anchor.status_code == 200
+    missing_body = stream_missing_anchor.text
+    assert "is now done" in missing_body
+    assert "Assigned task: First Task" not in missing_body
+
 
 def test_due_soon_reminder_scheduler_and_deduplication(
     client: TestClient,
