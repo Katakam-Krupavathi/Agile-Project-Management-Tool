@@ -67,6 +67,10 @@ def _allocate_story_number(db: Session, project_id: str) -> int:
     return int(allocated) - 1
 
 
+def _escape_like(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def list_stories(
     db: Session,
     project: Project,
@@ -86,12 +90,13 @@ def list_stories(
         stmt = stmt.where(Story.status == status_filter.value)
     if assignee_id is not None:
         stmt = stmt.where(Story.assignee_id == assignee_id)
-    if q:
-        pattern = f"%{q.strip()}%"
+    if q and q.strip():
+        escaped = _escape_like(q.strip())
+        pattern = f"%{escaped}%"
         stmt = stmt.where(
             or_(
-                Story.title.ilike(pattern),
-                Story.description.ilike(pattern),
+                Story.title.ilike(pattern, escape="\\"),
+                Story.description.ilike(pattern, escape="\\"),
             )
         )
 

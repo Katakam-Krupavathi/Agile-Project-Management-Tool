@@ -135,3 +135,42 @@ def test_patch_story_status_places_story_at_end_of_target_column(client: TestCli
         in_prog_2["id"],
         backlog_story["id"],
     ]
+
+
+def test_story_search_escapes_like_wildcards(client: TestClient) -> None:
+    _user, headers = _auth(client, "wildcard@example.com", "Wildcard Owner")
+    project_id = client.post(
+        "/api/v1/projects",
+        json={"key": "WLD", "name": "Wildcard Project"},
+        headers=headers,
+    ).json()["id"]
+
+    literal_story = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={
+            "title": "Reach 100% coverage",
+            "description": "Audit user_id column",
+        },
+        headers=headers,
+    ).json()
+    decoy_story = client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={
+            "title": "Reach 1000 coverage",
+            "description": "Audit userXid column",
+        },
+        headers=headers,
+    ).json()
+
+    percent_res = client.get(
+        f"/api/v1/projects/{project_id}/stories",
+        params={"q": "100%"},
+    ).json()["items"]
+    assert [s["id"] for s in percent_res] == [literal_story["id"]]
+    assert decoy_story["id"] not in [s["id"] for s in percent_res]
+
+    underscore_res = client.get(
+        f"/api/v1/projects/{project_id}/stories",
+        params={"q": "user_id"},
+    ).json()["items"]
+    assert [s["id"] for s in underscore_res] == [literal_story["id"]]
