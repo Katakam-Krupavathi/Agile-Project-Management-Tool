@@ -32,18 +32,21 @@ See [docs/architecture.md](docs/architecture.md) for layering details.
 
 ## Quick Start (Docker Compose)
 
+Create a `.env` file with a strong `SECRET_KEY` (at least 32 characters; `APP_ENV=production` refuses to start with a default or short secret). For local HTTP demos, set `SESSION_COOKIE_SECURE=false` and `SEED_DEMO=true`:
+
 ```bash
 git clone https://github.com/Katakam-Krupavathi/Agile-Project-Management-Tool.git
 cd Agile-Project-Management-Tool
+printf "SECRET_KEY=replace-with-at-least-32-random-bytes-secret-key\nSESSION_COOKIE_SECURE=false\nSEED_DEMO=true\n" > .env
 docker compose up --build
 ```
 
 - **Web App**: `http://localhost:5173`
-- **API & Swagger Docs**: `http://localhost:8000/docs`
+- **API**: `http://localhost:8000` (Swagger `/docs` and `/openapi.json` are enabled in development or when `ENABLE_API_DOCS=true`, and disabled by default in production)
 
-### Demo Accounts (Seeded Automatically)
+### Demo Accounts (Opt-In via `SEED_DEMO=true`)
 
-`docker compose up` runs Alembic migrations and seeds a demo workspace (3 users, 2 projects, 8 stories, 25 tasks, and 1 sample report) when `SEED_DEMO=true`:
+`SEED_DEMO` defaults to `false` in `docker-compose.yml` for safe production deployments. When `SEED_DEMO=true` is set (or when running `python -m app.db.seed` locally), an idempotent demo workspace (3 users, 2 projects, 8 stories, 25 tasks, and 1 sample report) is seeded:
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -130,14 +133,14 @@ Full table: [docs/decisions.md](docs/decisions.md).
 
 ## Security & Honest Limitations
 
-Implemented: Argon2id password hashing, `httpOnly` `SameSite=Lax` cookies, constant-time double-submit CSRF, sliding-window login rate limiting (`429` + `Retry-After`), centralized RBAC with `404` anti-enumeration, Pydantic input length limits, 1 MB request body limit (`413`), security headers, explicit CORS allow-list, and CI `pip-audit` + `npm audit`.
+Implemented: Argon2id password hashing with constant-time dummy verification for unknown users, `httpOnly` `SameSite=Lax` cookies (`Secure` by default in production) with `token_version` server-side session revocation on logout (and per-poll SSE session re-validation), constant-time double-submit CSRF, multi-layer rate limiting (per-(IP, email) login, per-IP login across emails, per-account progressive soft backoff, and per-IP registration rate limiting), `--proxy-headers` + `FORWARDED_ALLOW_IPS` behind Nginx, production `SECRET_KEY` (>= 32 chars) startup validation, gated `/docs` & `/openapi.json` in production, centralized RBAC with `404` anti-enumeration, Pydantic input length limits, 1 MB request body limit (`413`), API + Nginx HSTS/CSP security headers, explicit CORS allow-list, and CI `pip-audit` + `npm audit`.
 
 **Honest limitations** (see [docs/security.md](docs/security.md)):
-- SQLite allows only one writer at a time.
-- Login rate limiting is in-memory per process (resets on restart).
+- SQLite allows only one writer at a time (`BEGIN IMMEDIATE` + `busy_timeout=5000` serializes concurrent writes).
+- Rate limiting and per-user SSE stream caps are in-memory per process (resets on restart).
 - No email verification or password reset flow (`ConsoleMailer` logs to stdout).
 - No MFA or SSO/OAuth.
-- Stateless signed cookies cannot be revoked server-side before expiry.
+- Logout increments `users.token_version`, revoking all active sessions for that user rather than tracking individual device sessions separately.
 
 ## Testing & Linting
 

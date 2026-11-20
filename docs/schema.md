@@ -31,6 +31,7 @@ erDiagram
         string name
         string password_hash
         boolean is_active
+        int token_version
         datetime created_at
         datetime updated_at
     }
@@ -146,6 +147,7 @@ Stores registered team members and their credentials.
 | `name` | `VARCHAR(120)` | `NOT NULL` | Display name shown on stories, tasks, and activity entries. |
 | `password_hash` | `VARCHAR(255)` | `NOT NULL` | Argon2id password hash; plaintext passwords are never stored. |
 | `is_active` | `BOOLEAN` | `NOT NULL`, default `true` | Allows deactivating an account without deleting historical references. |
+| `token_version` | `INTEGER` | `NOT NULL`, default `0` | Monotonic counter embedded in session tokens and incremented on logout to revoke existing sessions. |
 | `created_at` | `DATETIME` | `NOT NULL` | UTC timestamp when the account was created. |
 | `updated_at` | `DATETIME` | `NOT NULL` | UTC timestamp of the last account update. |
 
