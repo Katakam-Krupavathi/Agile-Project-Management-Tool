@@ -123,3 +123,13 @@ def handle_due_soon_reminder(db: Session, payload: dict[str, Any]) -> dict[str, 
 @register("generate_project_report")
 def handle_generate_project_report(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     return report_service.generate_report_for_job(db, payload)
+
+
+@register("cleanup_succeeded_jobs")
+def handle_cleanup_succeeded_jobs(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.jobs.worker import cleanup_old_succeeded_jobs
+
+    retention_raw = payload.get("retention_days")
+    retention_days = int(retention_raw) if isinstance(retention_raw, int) else None
+    deleted = cleanup_old_succeeded_jobs(db, retention_days=retention_days)
+    return {"deleted_jobs": deleted}

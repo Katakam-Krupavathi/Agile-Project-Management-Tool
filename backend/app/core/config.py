@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     sse_poll_interval_seconds: float = 1.0
     report_cooldown_seconds: int = 30
     report_retention_max_per_project: int = 20
+    job_cleanup_retention_days: int = 7
+    worker_maintenance_interval_seconds: float = 30.0
+    worker_lock_heartbeat_interval_seconds: float = 60.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod

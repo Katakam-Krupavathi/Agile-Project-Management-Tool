@@ -424,3 +424,108 @@ def test_job_status_and_retry_endpoints_enforce_visibility_and_owner_rbac(
         assert rm.status_code == 204
         assert member_client.get(f"/api/v1/jobs/{member_proj_job_id}").status_code == 404
         assert member_client.get(f"/api/v1/jobs/{member_global_job_id}").status_code == 200
+
+
+def test_cleanup_removes_only_old_succeeded_jobs(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    from app.jobs.worker import cleanup_old_succeeded_jobs
+
+    now = datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)
+    with db_session_factory() as db:
+        old_succeeded = enqueue_job(db, "test.cleanup", {"k": "old_ok"}, run_at=now)
+        old_succeeded.status = JobStatus.SUCCEEDED.value
+        old_succeeded.completed_at = now - timedelta(days=10)
+        old_succeeded.updated_at = now - timedelta(days=10)
+
+        recent_succeeded = enqueue_job(db, "test.cleanup", {"k": "recent_ok"}, run_at=now)
+        recent_succeeded.status = JobStatus.SUCCEEDED.value
+        recent_succeeded.completed_at = now - timedelta(days=2)
+        recent_succeeded.updated_at = now - timedelta(days=2)
+
+        old_dead = enqueue_job(db, "test.cleanup", {"k": "old_dead"}, run_at=now)
+        old_dead.status = JobStatus.DEAD.value
+        old_dead.updated_at = now - timedelta(days=20)
+
+        old_queued = enqueue_job(db, "test.cleanup", {"k": "old_queued"}, run_at=now)
+        old_queued.status = JobStatus.QUEUED.value
+        old_queued.updated_at = now - timedelta(days=20)
+
+        db.commit()
+        old_ok_id = old_succeeded.id
+        kept_ids = {recent_succeeded.id, old_dead.id, old_queued.id}
+
+    with db_session_factory() as db:
+        deleted = cleanup_old_succeeded_jobs(db, retention_days=7, now=now)
+        assert deleted == 1
+        assert get_job_by_id(db, old_ok_id) is None
+        for kept_id in kept_ids:
+            assert get_job_by_id(db, kept_id) is not None
+
+
+def test_lock_heartbeat_prevents_duplicate_execution_of_slow_handler(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    import time
+
+    from app.jobs.worker import Worker
+
+    job_type = "test.slow_heartbeat"
+    started = threading.Event()
+    executions = {"count": 0}
+
+    @register(job_type)
+    def slow_handler(_db: Session, _payload: dict[str, Any]) -> dict[str, Any]:
+        executions["count"] += 1
+        started.set()
+        time.sleep(0.22)
+        return {"ok": True}
+
+    try:
+        with db_session_factory() as db:
+            job = enqueue_job(db, job_type, {})
+            db.commit()
+            job_id = job.id
+
+        def run_worker_1() -> None:
+            with db_session_factory() as db:
+                res = process_next_job(
+                    db,
+                    "worker-1",
+                    heartbeat_interval_seconds=0.03,
+                    heartbeat_session_factory=db_session_factory,
+                )
+                assert res is not None
+                assert res.status == JobStatus.SUCCEEDED.value
+
+        t1 = threading.Thread(target=run_worker_1)
+        t1.start()
+        assert started.wait(timeout=2.0)
+
+        # Wait longer than the 0.10s lock timeout while worker-1 is still mid-execution;
+        # heartbeat refreshes locked_at every 0.03s so recover_stuck_jobs must NOT steal the job.
+        time.sleep(0.14)
+        with db_session_factory() as db:
+            recovered = recover_stuck_jobs(db, lock_timeout_seconds=0.10)
+            assert recovered == 0
+            stolen = process_next_job(db, "worker-2")
+            assert stolen is None
+
+        t1.join(timeout=2.0)
+        assert executions["count"] == 1
+
+        with db_session_factory() as db:
+            finished = get_job_by_id(db, job_id)
+            assert finished is not None
+            assert finished.status == JobStatus.SUCCEEDED.value
+
+        # Timed maintenance runs only when the interval has elapsed
+        worker = Worker(
+            session_factory=db_session_factory,
+            maintenance_interval_seconds=30.0,
+        )
+        assert worker.run_maintenance_if_due(now_monotonic=100.0) is True
+        assert worker.run_maintenance_if_due(now_monotonic=115.0) is False
+        assert worker.run_maintenance_if_due(now_monotonic=131.0) is True
+    finally:
+        unregister(job_type)
