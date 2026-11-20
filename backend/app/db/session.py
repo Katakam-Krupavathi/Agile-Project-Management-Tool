@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,19 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+@contextmanager
+def open_db_session(app: Any = None) -> Generator[Session, None, None]:
+    """Open a short-lived DB session (respecting dependency_overrides) and close it on exit."""
+    provider = get_db
+    if app is not None and hasattr(app, "dependency_overrides"):
+        provider = app.dependency_overrides.get(get_db, get_db)
+    gen = provider()
+    try:
+        yield next(gen)
+    finally:
+        gen.close()
 
 
 def begin_immediate_if_sqlite(db: Session) -> None:

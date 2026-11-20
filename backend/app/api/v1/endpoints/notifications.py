@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_csrf
-from app.db.session import get_db
+from app.db.session import get_db, open_db_session
 from app.models.user import User
 from app.schemas.notification import (
     NotificationPageResponse,
@@ -46,7 +46,6 @@ def list_notifications(
 async def stream_notifications(
     request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
     last_event_id_header: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     last_event_id_query: Annotated[str | None, Query(alias="last_event_id")] = None,
     once: Annotated[bool, Query()] = False,
@@ -54,6 +53,16 @@ async def stream_notifications(
     cursor_event_id = last_event_id_header or last_event_id_query
     poll_interval_seconds = 1.0
     heartbeat_every_polls = 15
+    user_id = current_user.id
+    app = request.app
+
+    def _poll_events(last_id: str | None) -> list[NotificationResponse]:
+        with open_db_session(app) as db:
+            return notification_service.get_notifications_since(
+                db,
+                user_id,
+                last_event_id=last_id,
+            )
 
     async def event_generator() -> AsyncGenerator[str, None]:
         nonlocal cursor_event_id
@@ -63,11 +72,7 @@ async def stream_notifications(
             if await request.is_disconnected():
                 break
 
-            events = notification_service.get_notifications_since(
-                db,
-                current_user.id,
-                last_event_id=cursor_event_id,
-            )
+            events = await asyncio.to_thread(_poll_events, cursor_event_id)
             for item in events:
                 cursor_event_id = item.id
                 payload_json = item.model_dump_json()

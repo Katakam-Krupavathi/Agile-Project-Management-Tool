@@ -4,7 +4,6 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
@@ -401,10 +400,6 @@ async def _open_asgi_sse_stream(
             await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GET /notifications/stream holds Depends(get_db) for the stream lifetime",
-)
 def test_twenty_open_sse_streams_do_not_exhaust_db_pool(
     db_session_factory: sessionmaker[Session],
 ) -> None:

@@ -1,19 +1,17 @@
 from typing import Annotated
 
 from fastapi import Depends, Request
-from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ForbiddenError, UnauthorizedError
 from app.core.security import verify_csrf_token, verify_session_token
-from app.db.session import get_db
+from app.db.session import open_db_session
 from app.models.user import User
 from app.services import auth_service
 
 
 def get_current_user(
     request: Request,
-    db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> User:
     session_token = request.cookies.get(settings.session_cookie_name)
@@ -28,9 +26,11 @@ def get_current_user(
     if not user_id:
         raise UnauthorizedError("Invalid or expired session.", code="INVALID_SESSION")
 
-    user = auth_service.get_active_user_by_id(db, user_id)
-    if user is None:
-        raise UnauthorizedError("Account is inactive or not found.", code="INVALID_SESSION")
+    with open_db_session(request.app) as db:
+        user = auth_service.get_active_user_by_id(db, user_id)
+        if user is None:
+            raise UnauthorizedError("Account is inactive or not found.", code="INVALID_SESSION")
+        db.expunge(user)
 
     return user
 
