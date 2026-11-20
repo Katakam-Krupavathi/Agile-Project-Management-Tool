@@ -113,8 +113,8 @@ stateDiagram-v2
 ```
 
 - **Transactional outbox**: Jobs are inserted inside the caller's DB transaction so a rolled-back mutation never leaves orphaned background work.
-- **Retry & Dead-lettering**: Transient failures are retried after `10s`, `40s`, and `160s` (+ 0–10% jitter). After `max_attempts`, jobs transition to `dead`, where project owners can inspect `last_error` and click **Retry**.
-- **Crash recovery**: Jobs left in `running` beyond the lock timeout (300s) are reclaimed back to `queued` (or `dead` if attempts are exhausted).
+- **Retry & Dead-lettering (`max_attempts = 4`)**: Transient failures on attempts 1, 2, and 3 are retried after `10s`, `40s`, and `160s` (+ 0–10% jitter). If attempt 4 fails (`attempts >= max_attempts`), the job transitions to `dead`, where project owners can inspect the sanitized `last_error` and click **Retry**.
+- **Lock heartbeat, crash recovery & daily cleanup**: While a handler executes, the worker refreshes `locked_at` via a background lock heartbeat. Every 30 seconds, timed maintenance reclaims jobs stuck in `running` beyond the lock timeout (300s), schedules hourly `due_soon_reminder` scans, and schedules daily `cleanup_succeeded_jobs` pruning of succeeded jobs older than 7 days. The worker writes a liveness heartbeat file every loop verified by the Docker Compose healthcheck.
 
 Full details: [docs/async-workflow.md](docs/async-workflow.md).
 

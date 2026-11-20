@@ -280,7 +280,7 @@ SQLite-backed asynchronous job queue polled by the background worker process.
 | `status` | `VARCHAR(16)` | `NOT NULL`, default `'queued'`, `CHECK (status IN ('queued','running','succeeded','failed','dead'))` | Lifecycle state of the job. |
 | `run_at` | `DATETIME` | `NOT NULL` | Earliest UTC timestamp when the worker may claim the job (supports retries/backoff). |
 | `attempts` | `INTEGER` | `NOT NULL`, default `0`, `CHECK (>= 0)` | Number of execution attempts so far. |
-| `max_attempts` | `INTEGER` | `NOT NULL`, default `3`, `CHECK (>= 1)` | Maximum attempts before transitioning to `dead`. |
+| `max_attempts` | `INTEGER` | `NOT NULL`, default `4`, `CHECK (>= 1)` | Maximum attempts before transitioning to `dead` (allows 3 retry backoffs of 10s, 40s, and 160s). |
 | `locked_at` | `DATETIME` | nullable | UTC timestamp when a worker leased the job. |
 | `locked_by` | `VARCHAR(120)` | nullable | Worker instance identifier currently holding the lease. |
 | `last_error` | `TEXT` | nullable | Error message from the most recent failed attempt. |
