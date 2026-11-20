@@ -1,4 +1,14 @@
+import asyncio
+from typing import Any
+
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.config import Settings, get_settings
+from app.db.session import get_db
+from app.main import create_app
+from tests.test_async_features import _open_asgi_sse_stream
 
 
 def _assert_problem_envelope(response_json: dict, expected_status: int, expected_code: str) -> None:
@@ -154,3 +164,239 @@ def test_login_rate_limiting_returns_429_with_retry_after(client: TestClient) ->
     assert limited.headers["content-type"].startswith("application/problem+json")
     assert int(limited.headers["retry-after"]) >= 1
     _assert_problem_envelope(limited.json(), 429, "LOGIN_RATE_LIMITED")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Session revocation via token_version not implemented yet",
+)
+def test_logout_revokes_old_session_cookie_on_replay(client: TestClient) -> None:
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "replay@example.com",
+            "name": "Replay User",
+            "password": "StrongPassword123",
+        },
+    )
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "replay@example.com", "password": "StrongPassword123"},
+    )
+    assert login_res.status_code == 200
+    csrf_token = login_res.json()["csrf_token"]
+    saved_session_cookie = client.cookies.get("agile_pm_session")
+    assert saved_session_cookie
+
+    logout_res = client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert logout_res.status_code == 204
+
+    # Replay the captured pre-logout session cookie
+    client.cookies.set("agile_pm_session", saved_session_cookie)
+    replayed = client.get("/api/v1/auth/me")
+    assert replayed.status_code == 401
+    _assert_problem_envelope(replayed.json(), 401, "INVALID_SESSION")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="SSE loop does not re-validate token_version on every poll yet",
+)
+def test_sse_stream_closes_after_logout_revokes_session(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    app = create_app()
+
+    def override_get_db() -> Any:
+        db = db_session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    base_settings = get_settings()
+    fast_poll_settings = base_settings.model_copy(
+        update={"sse_poll_interval_seconds": 0.05}
+    )
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_settings] = lambda: fast_poll_settings
+
+    with TestClient(app) as local_client:
+        local_client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "sse_logout@example.com",
+                "name": "SSE Logout",
+                "password": "StrongPassword123",
+            },
+        )
+        login_res = local_client.post(
+            "/api/v1/auth/login",
+            json={"email": "sse_logout@example.com", "password": "StrongPassword123"},
+        )
+        assert login_res.status_code == 200
+        csrf_token = login_res.json()["csrf_token"]
+        session_cookie = local_client.cookies.get(base_settings.session_cookie_name)
+        assert session_cookie
+
+        async def _run() -> None:
+            async with _open_asgi_sse_stream(app, session_cookie) as stream:
+                assert stream["status"] == 200
+                logout_res = local_client.post(
+                    "/api/v1/auth/logout",
+                    headers={"X-CSRF-Token": csrf_token},
+                )
+                assert logout_res.status_code == 204
+                # Stream task should exit promptly on its next poll after token_version bump
+                await asyncio.wait_for(stream["task"], timeout=0.6)
+
+        asyncio.run(_run())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Unknown-user login path skips Argon2 verify",
+)
+def test_unknown_user_and_wrong_password_both_call_argon2_hasher(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.core.security as security_mod
+
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "known@example.com",
+            "name": "Known User",
+            "password": "StrongPassword123",
+        },
+    )
+
+    verify_calls: list[str] = []
+    original_verify = security_mod._password_hasher.verify
+
+    def spy_verify(hash_val: str, password: str) -> bool:
+        verify_calls.append(password)
+        return original_verify(hash_val, password)
+
+    monkeypatch.setattr(security_mod._password_hasher, "verify", spy_verify)
+
+    unknown_res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "unknown_person@example.com", "password": "AttemptPassword1"},
+    )
+    assert unknown_res.status_code == 401
+    assert len(verify_calls) == 1
+
+    wrong_res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "known@example.com", "password": "AttemptPassword2"},
+    )
+    assert wrong_res.status_code == 401
+    assert len(verify_calls) == 2
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Per-IP login limiter and register rate limiter not implemented yet",
+)
+def test_per_ip_login_limiter_across_emails_and_register_limiter(
+    client: TestClient,
+) -> None:
+    # 1. Per-IP login limiter triggers across distinct emails (even with 1 attempt per email)
+    triggered_ip_limit = False
+    for idx in range(20):
+        res = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": f"spray_{idx}@example.com",
+                "password": "WrongPassword123",
+            },
+        )
+        if res.status_code == 429:
+            triggered_ip_limit = True
+            assert int(res.headers["retry-after"]) >= 1
+            _assert_problem_envelope(res.json(), 429, "LOGIN_RATE_LIMITED")
+            break
+        assert res.status_code == 401
+    assert triggered_ip_limit is True
+
+    # 2. Register endpoint rate limiter triggers after max attempts from same IP
+    triggered_register_limit = False
+    for idx in range(15):
+        reg = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"bulkreg_{idx}@example.com",
+                "name": f"Bulk {idx}",
+                "password": "StrongPassword123",
+            },
+        )
+        if reg.status_code == 429:
+            triggered_register_limit = True
+            assert int(reg.headers["retry-after"]) >= 1
+            _assert_problem_envelope(reg.json(), 429, "REGISTER_RATE_LIMITED")
+            break
+        assert reg.status_code == 201
+    assert triggered_register_limit is True
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Production secret validation and default Secure cookie flag not implemented yet",
+)
+def test_production_defaults_reject_weak_secret_and_enable_secure_cookie(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        Settings(app_env="production")
+
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        Settings(app_env="production", secret_key="too-short-secret")
+
+    prod_settings = Settings(
+        app_env="production",
+        secret_key="prod-secret-key-with-at-least-32-characters-long!",
+    )
+    assert prod_settings.session_cookie_secure is True
+    assert prod_settings.enable_api_docs is False
+
+    app = create_app(prod_settings)
+
+    def override_get_db() -> Any:
+        db = db_session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_settings] = lambda: prod_settings
+
+    with TestClient(app, base_url="https://testserver") as prod_client:
+        assert prod_client.get("/docs").status_code == 404
+        assert prod_client.get("/openapi.json").status_code == 404
+
+        reg = prod_client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "prod@example.com",
+                "name": "Prod User",
+                "password": "StrongPassword123",
+            },
+        )
+        assert reg.status_code == 201
+
+        login = prod_client.post(
+            "/api/v1/auth/login",
+            json={"email": "prod@example.com", "password": "StrongPassword123"},
+        )
+        assert login.status_code == 200
+        set_cookies = login.headers.get_list("set-cookie")
+        session_header = next(
+            h for h in set_cookies if h.startswith(f"{prod_settings.session_cookie_name}=")
+        )
+        assert "secure" in session_header.lower()
