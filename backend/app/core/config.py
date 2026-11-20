@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     login_rate_limit_max_attempts: int = 5
     login_rate_limit_window_seconds: int = 60
     max_request_body_bytes: int = 1_048_576
+    sse_max_streams_per_user: int = 3
+    sse_max_lifetime_seconds: float = 1800.0
+    sse_poll_interval_seconds: float = 1.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod

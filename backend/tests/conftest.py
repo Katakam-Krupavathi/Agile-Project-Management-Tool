@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.rate_limit import login_rate_limiter
 from app.db.session import create_db_engine, get_db
 from app.main import create_app
+from app.services.notification_service import reset_user_stream_slots
 
 
 @pytest.fixture
@@ -36,6 +37,7 @@ def db_session_factory(db_url: str) -> Generator[sessionmaker[Session], None, No
 @pytest.fixture
 def client(db_session_factory: sessionmaker[Session]) -> Generator[TestClient, None, None]:
     login_rate_limiter.reset()
+    reset_user_stream_slots()
     app = create_app()
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -48,4 +50,5 @@ def client(db_session_factory: sessionmaker[Session]) -> Generator[TestClient, N
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
         yield test_client
+    reset_user_stream_slots()
     login_rate_limiter.reset()

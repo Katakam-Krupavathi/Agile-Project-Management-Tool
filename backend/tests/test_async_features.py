@@ -16,6 +16,7 @@ from app.main import create_app
 from app.models.enums import JobStatus
 from app.models.user import User
 from app.services.mailer import ConsoleMailer, set_mailer
+from app.services.notification_service import reset_user_stream_slots
 from app.services.report_service import set_report_failure_hook
 
 
@@ -459,3 +460,78 @@ def test_twenty_open_sse_streams_do_not_exhaust_db_pool(
         asyncio.run(_run())
     finally:
         engine.pool._timeout = original_timeout
+        reset_user_stream_slots()
+
+
+def test_sse_per_user_stream_cap_and_max_lifetime(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    reset_user_stream_slots()
+    app = create_app()
+
+    def override_get_db() -> Any:
+        db = db_session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    base_settings = get_settings()
+    with db_session_factory() as db:
+        user = User(
+            email="cap_user@example.com",
+            name="Cap User",
+            password_hash=hash_password("StrongPassword123"),
+        )
+        db.add(user)
+        db.commit()
+        cookie = create_session_token(user.id, base_settings.secret_key)
+
+    async def _verify_cap() -> None:
+        async with AsyncExitStack() as stack:
+            # Open 3 concurrent streams for the same user (default cap = 3)
+            s1 = await stack.enter_async_context(_open_asgi_sse_stream(app, cookie))
+            s2 = await stack.enter_async_context(_open_asgi_sse_stream(app, cookie))
+            s3 = await stack.enter_async_context(_open_asgi_sse_stream(app, cookie))
+            assert s1["status"] == 200
+            assert s2["status"] == 200
+            assert s3["status"] == 200
+
+            # 4th concurrent stream for the same user is rejected with 429
+            with TestClient(app) as cap_client:
+                cap_client.cookies.set(base_settings.session_cookie_name, cookie)
+                over_cap = cap_client.get("/api/v1/notifications/stream?once=true")
+                assert over_cap.status_code == 429
+                assert over_cap.json()["code"] == "TOO_MANY_STREAMS"
+                assert over_cap.headers.get("Retry-After") == "5"
+
+        # After closing the 3 streams, user can open a stream again
+        with TestClient(app) as after_client:
+            after_client.cookies.set(base_settings.session_cookie_name, cookie)
+            reopened = after_client.get("/api/v1/notifications/stream?once=true")
+            assert reopened.status_code == 200
+
+    asyncio.run(_verify_cap())
+
+    # Configure short max_lifetime_seconds and verify stream ends automatically without once=true
+    short_settings = base_settings.model_copy(
+        update={
+            "sse_max_lifetime_seconds": 0.12,
+            "sse_poll_interval_seconds": 0.05,
+        }
+    )
+    app.dependency_overrides[get_settings] = lambda: short_settings
+    try:
+        t0 = time.monotonic()
+        with TestClient(app) as lifetime_client:
+            lifetime_client.cookies.set(base_settings.session_cookie_name, cookie)
+            resp = lifetime_client.get("/api/v1/notifications/stream")
+        elapsed = time.monotonic() - t0
+        assert resp.status_code == 200
+        assert "retry: 3000" in resp.text
+        assert 0.10 <= elapsed < 2.0
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        reset_user_stream_slots()

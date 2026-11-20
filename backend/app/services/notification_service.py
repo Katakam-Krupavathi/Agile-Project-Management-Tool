@@ -1,14 +1,47 @@
 from datetime import datetime
+from threading import Lock
+from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.core.errors import BadRequestError, NotFoundError
+from app.core.errors import BadRequestError, NotFoundError, RateLimitError
 from app.core.pagination import decode_cursor, encode_cursor
 from app.models.notification import Notification
 from app.models.user import User, utc_now
 from app.schemas.notification import NotificationResponse
 from app.services.mailer import get_mailer
+
+_stream_lock = Lock()
+_active_user_streams: dict[str, set[str]] = {}
+
+
+def acquire_user_stream_slot(user_id: str, *, max_streams: int = 3) -> str:
+    stream_id = str(uuid4())
+    with _stream_lock:
+        active = _active_user_streams.setdefault(user_id, set())
+        if len(active) >= max_streams:
+            raise RateLimitError(
+                "Too many concurrent notification streams for this user.",
+                code="TOO_MANY_STREAMS",
+                headers={"Retry-After": "5"},
+            )
+        active.add(stream_id)
+    return stream_id
+
+
+def release_user_stream_slot(user_id: str, stream_id: str) -> None:
+    with _stream_lock:
+        active = _active_user_streams.get(user_id)
+        if active is not None:
+            active.discard(stream_id)
+            if not active:
+                _active_user_streams.pop(user_id, None)
+
+
+def reset_user_stream_slots() -> None:
+    with _stream_lock:
+        _active_user_streams.clear()
 
 
 def to_notification_response(notification: Notification) -> NotificationResponse:
