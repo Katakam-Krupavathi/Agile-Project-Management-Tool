@@ -6,7 +6,7 @@ All endpoints are served under `/api/v1`. Interactive OpenAPI documentation is a
 
 - **Error Envelope (RFC 7807)**: All errors return `Content-Type: application/problem+json` with `type`, `title`, `status`, `detail`, `instance`, and `code` (plus `errors[]` on `422`).
 - **Cursor Pagination**: List endpoints accept `?limit=20&cursor=<opaque>` and return `{ "items": [...], "next_cursor": "...", "has_more": false }`.
-- **Optimistic Concurrency**: `PATCH` endpoints on projects, stories, and tasks require `version`. A stale `version` returns `409 Conflict` (`code: "VERSION_CONFLICT"`).
+- **Optimistic Concurrency**: `PATCH` endpoints on projects, stories, and tasks—as well as `POST /stories/{id}/move` and `POST /tasks/{id}/move`—require `version` (`>= 1`). Omitting `version` returns `422 Unprocessable Entity`. The version check is enforced atomically in SQL (`UPDATE ... WHERE id = :id AND version = :version AND deleted_at IS NULL`); a stale `version` returns `409 Conflict` (`code: "VERSION_CONFLICT"`).
 - **CSRF**: All `POST`, `PATCH`, and `DELETE` requests (except `/auth/register` and `/auth/login`) require the `X-CSRF-Token` header matching the `agile_pm_csrf` cookie.
 
 ## Quick `curl` Examples

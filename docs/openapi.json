@@ -2910,21 +2910,15 @@
             "title": "After Id"
           },
           "version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Version"
           }
         },
         "type": "object",
         "required": [
-          "status"
+          "status",
+          "version"
         ],
         "title": "StoryMoveRequest"
       },
@@ -3338,19 +3332,15 @@
             ]
           },
           "version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Version"
           }
         },
         "type": "object",
+        "required": [
+          "version"
+        ],
         "title": "TaskMoveRequest"
       },
       "TaskResponse": {
