@@ -33,6 +33,25 @@ class SlidingWindowRateLimiter:
             self._prune(bucket, now, window_seconds)
             bucket.append(now)
 
+    def compute_backoff_delay(
+        self,
+        key: str,
+        base_seconds: float,
+        max_seconds: float,
+        window_seconds: int,
+    ) -> float:
+        if base_seconds <= 0 or max_seconds <= 0:
+            return 0.0
+        now = self._clock()
+        with self._lock:
+            bucket = self._attempts[key]
+            self._prune(bucket, now, window_seconds)
+            failures = len(bucket)
+            if failures == 0:
+                return 0.0
+            delay = base_seconds * (2 ** (failures - 1))
+            return float(min(delay, max_seconds))
+
     def clear(self, key: str) -> None:
         with self._lock:
             self._attempts.pop(key, None)

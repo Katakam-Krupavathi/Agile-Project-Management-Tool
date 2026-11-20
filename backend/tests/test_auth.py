@@ -291,13 +291,11 @@ def test_unknown_user_and_wrong_password_both_call_argon2_hasher(
     assert len(verify_calls) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Per-IP login limiter and register rate limiter not implemented yet",
-)
 def test_per_ip_login_limiter_across_emails_and_register_limiter(
     client: TestClient,
 ) -> None:
+    from app.core.rate_limit import login_rate_limiter
+
     # 1. Per-IP login limiter triggers across distinct emails (even with 1 attempt per email)
     triggered_ip_limit = False
     for idx in range(20):
@@ -315,6 +313,10 @@ def test_per_ip_login_limiter_across_emails_and_register_limiter(
             break
         assert res.status_code == 401
     assert triggered_ip_limit is True
+
+    # Per-account soft delay (progressive backoff) grows after failures without hard-locking account
+    d1 = login_rate_limiter.compute_backoff_delay("acct:spray_0@example.com", 0.05, 1.0, 300)
+    assert d1 == pytest.approx(0.05)
 
     # 2. Register endpoint rate limiter triggers after max attempts from same IP
     triggered_register_limit = False

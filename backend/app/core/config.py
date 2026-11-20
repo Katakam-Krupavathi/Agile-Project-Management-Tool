@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     csrf_header_name: str = "X-CSRF-Token"
     login_rate_limit_max_attempts: int = 5
     login_rate_limit_window_seconds: int = 60
+    login_ip_rate_limit_max_attempts: int = 15
+    login_ip_rate_limit_window_seconds: int = 60
+    login_account_backoff_base_seconds: float = 0.05
+    login_account_backoff_max_seconds: float = 1.0
+    login_account_backoff_window_seconds: int = 300
+    register_rate_limit_max_attempts: int = 10
+    register_rate_limit_window_seconds: int = 60
     max_request_body_bytes: int = 1_048_576
     sse_max_streams_per_user: int = 3
     sse_max_lifetime_seconds: float = 1800.0
