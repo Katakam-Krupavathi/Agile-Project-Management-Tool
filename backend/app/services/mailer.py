@@ -9,15 +9,23 @@ class Mailer(Protocol):
     def send(self, *, to_email: str, subject: str, body: str) -> None: ...
 
 
+def mask_email(email: str) -> str:
+    local, sep, domain = email.strip().partition("@")
+    if not sep or not domain:
+        return "***"
+    masked_local = "*" if len(local) <= 1 else f"{local[0]}***"
+    return f"{masked_local}@{domain}"
+
+
 class ConsoleMailer:
     def send(self, *, to_email: str, subject: str, body: str) -> None:
+        _ = body
         logger.info(
             json.dumps(
                 {
                     "event": "email.sent",
-                    "to": to_email,
+                    "to": mask_email(to_email),
                     "subject": subject,
-                    "body": body,
                 }
             )
         )

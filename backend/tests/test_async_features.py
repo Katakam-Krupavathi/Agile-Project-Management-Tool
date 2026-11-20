@@ -49,7 +49,8 @@ def _drain_worker(db_session_factory: sessionmaker[Session], now: datetime | Non
             job = process_next_job(db, "test-worker", now=now, rng=lambda: 0.0)
             if job is None:
                 break
-            processed += 1
+            if job.job_type != "send_email":
+                processed += 1
     return processed
 
 
@@ -548,3 +549,94 @@ def test_sse_per_user_stream_cap_and_max_lifetime(
     finally:
         app.dependency_overrides.pop(get_settings, None)
         reset_user_stream_slots()
+
+
+def test_notification_title_truncation_separate_email_job_and_masked_console_mailer(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+    caplog: Any,
+) -> None:
+    import logging
+
+    from app.jobs.queue import enqueue_job
+
+    mailer = _RecordingMailer()
+    set_mailer(mailer)
+    try:
+        user, headers = _auth(client, "trunc@example.com", "Trunc User")
+        project_id = client.post(
+            "/api/v1/projects",
+            json={"key": "TRN", "name": "Truncate Project"},
+            headers=headers,
+        ).json()["id"]
+        story_id = client.post(
+            f"/api/v1/projects/{project_id}/stories",
+            json={"title": "Long Title Story"},
+            headers=headers,
+        ).json()["id"]
+
+        long_task_title = "X" * 195
+        client.post(
+            f"/api/v1/stories/{story_id}/tasks",
+            json={"title": long_task_title, "assignee_id": user["id"]},
+            headers=headers,
+        )
+
+        # Step 1: process send_notification job -> creates notification with 200-char truncated
+        # title and enqueues a separate send_email job (mailer is NOT called yet).
+        with db_session_factory() as db:
+            notif_job = process_next_job(db, "test-worker", rng=lambda: 0.0)
+            assert notif_job is not None
+            assert notif_job.job_type == "send_notification"
+            assert notif_job.status == JobStatus.SUCCEEDED.value
+
+        assert len(mailer.sent) == 0
+
+        listing = client.get("/api/v1/notifications").json()["items"]
+        assert len(listing) == 1
+        notif = listing[0]
+        assert len(notif["title"]) == 200
+        assert notif["title"].endswith("…")
+
+        # Re-enqueuing with the same per-notification idempotency key does not duplicate email job
+        with db_session_factory() as db:
+            dup_email_job = enqueue_job(
+                db,
+                "send_email",
+                {
+                    "notification_id": notif["id"],
+                    "user_id": user["id"],
+                    "subject": notif["title"],
+                    "body": notif["body"],
+                },
+                project_id=project_id,
+                idempotency_key=f"send_email:{notif['id']}",
+            )
+            db.commit()
+            assert dup_email_job.job_type == "send_email"
+
+        # Step 2: process send_email job -> sends exactly 1 email
+        with db_session_factory() as db:
+            email_job = process_next_job(db, "test-worker", rng=lambda: 0.0)
+            assert email_job is not None
+            assert email_job.job_type == "send_email"
+            assert email_job.status == JobStatus.SUCCEEDED.value
+            assert process_next_job(db, "test-worker", rng=lambda: 0.0) is None
+
+        assert len(mailer.sent) == 1
+        assert len(mailer.sent[0]["subject"]) == 200
+    finally:
+        set_mailer(ConsoleMailer())
+
+    # ConsoleMailer logs only masked address and subject, never full body
+    with caplog.at_level(logging.INFO, logger="app.services.mailer"):
+        ConsoleMailer().send(
+            to_email="sensitive.person@example.com",
+            subject="Status update",
+            body="TOP_SECRET_TASK_BODY_CONTENT",
+        )
+    logged_text = "\n".join(caplog.messages)
+    assert "s***@example.com" in logged_text
+    assert "sensitive.person@example.com" not in logged_text
+    assert "Status update" in logged_text
+    assert "TOP_SECRET_TASK_BODY_CONTENT" not in logged_text

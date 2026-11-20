@@ -7,10 +7,22 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, NotFoundError, RateLimitError
 from app.core.pagination import decode_cursor, encode_cursor
+from app.jobs.queue import enqueue_job
 from app.models.notification import Notification
-from app.models.user import User, utc_now
+from app.models.user import utc_now
 from app.schemas.notification import NotificationResponse
-from app.services.mailer import get_mailer
+
+MAX_NOTIFICATION_TITLE_LEN = 200
+
+
+def truncate_notification_title(
+    title: str,
+    max_length: int = MAX_NOTIFICATION_TITLE_LEN,
+) -> str:
+    cleaned = title.strip()
+    if len(cleaned) <= max_length:
+        return cleaned
+    return f"{cleaned[: max_length - 1]}…"
 
 _stream_lock = Lock()
 _active_user_streams: dict[str, set[str]] = {}
@@ -60,11 +72,12 @@ def create_notification(
     entity_id: str | None = None,
     send_email: bool = True,
 ) -> Notification:
+    safe_title = truncate_notification_title(title)
     notification = Notification(
         user_id=user_id,
         project_id=project_id,
         type=notification_type,
-        title=title,
+        title=safe_title,
         body=body,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -73,13 +86,18 @@ def create_notification(
     db.flush()
 
     if send_email:
-        user = db.scalar(select(User).where(User.id == user_id))
-        if user is not None:
-            get_mailer().send(
-                to_email=user.email,
-                subject=title,
-                body=body or title,
-            )
+        enqueue_job(
+            db,
+            "send_email",
+            {
+                "notification_id": notification.id,
+                "user_id": user_id,
+                "subject": safe_title,
+                "body": body or safe_title,
+            },
+            project_id=project_id,
+            idempotency_key=f"send_email:{notification.id}",
+        )
 
     return notification
 

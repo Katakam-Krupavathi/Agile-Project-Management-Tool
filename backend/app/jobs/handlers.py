@@ -10,8 +10,9 @@ from app.models.enums import ActivityEntityType, TaskStatus
 from app.models.project import Project, ProjectMember
 from app.models.story import Story
 from app.models.task import Task
-from app.models.user import utc_now
+from app.models.user import User, utc_now
 from app.services import notification_service, report_service
+from app.services.mailer import get_mailer
 
 
 @register("send_notification")
@@ -40,6 +41,29 @@ def handle_send_notification(db: Session, payload: dict[str, Any]) -> dict[str, 
         send_email=True,
     )
     return {"notification_id": notification.id}
+
+
+@register("send_email")
+def handle_send_email(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    to_email = payload.get("to_email")
+    if not isinstance(to_email, str) or not to_email:
+        user_id = str(payload.get("user_id", ""))
+        user = db.scalar(select(User).where(User.id == user_id))
+        if user is None:
+            return {"skipped": True, "reason": "user_not_found"}
+        to_email = user.email
+
+    subject = notification_service.truncate_notification_title(str(payload.get("subject", "")))
+    body = str(payload.get("body") or subject)
+    get_mailer().send(
+        to_email=to_email,
+        subject=subject,
+        body=body,
+    )
+    return {
+        "sent": True,
+        "notification_id": payload.get("notification_id"),
+    }
 
 
 @register("due_soon_reminder")
