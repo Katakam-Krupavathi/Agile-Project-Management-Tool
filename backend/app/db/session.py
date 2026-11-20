@@ -2,7 +2,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -49,3 +49,18 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def begin_immediate_if_sqlite(db: Session) -> None:
+    """Release any read-only snapshot and acquire SQLite's write lock cleanly.
+
+    In SQLite WAL mode, upgrading a deferred read transaction to a write
+    transaction fails immediately with SQLITE_BUSY if another writer committed
+    after the snapshot began. Rolling back the read-only transaction and
+    issuing ``BEGIN IMMEDIATE`` honors ``busy_timeout`` and serializes writers
+    without spurious 500s.
+    """
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "sqlite":
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))

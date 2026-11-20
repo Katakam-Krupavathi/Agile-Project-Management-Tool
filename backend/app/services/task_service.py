@@ -1,8 +1,9 @@
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
+from app.db.session import begin_immediate_if_sqlite
 from app.jobs.queue import enqueue_job
 from app.models.enums import ActivityEntityType, TaskStatus
 from app.models.project import ProjectMember
@@ -149,11 +150,10 @@ def update_task(
     payload: TaskUpdateRequest,
     actor_id: str,
 ) -> TaskResponse:
-    if task.version != payload.version:
-        raise ConflictError(
-            "Task has been modified by another request. Reload and retry.",
-            code="VERSION_CONFLICT",
-        )
+    task_id = task.id
+
+    if "assignee_id" in payload.model_fields_set:
+        _validate_assignee(db, project_id, payload.assignee_id)
 
     before = {
         "title": task.title,
@@ -164,75 +164,102 @@ def update_task(
         "due_date": task.due_date.isoformat() if task.due_date else None,
     }
 
-    if "assignee_id" in payload.model_fields_set:
-        _validate_assignee(db, project_id, payload.assignee_id)
-        task.assignee_id = payload.assignee_id
-
-    if payload.title is not None:
-        task.title = payload.title
-    if "description" in payload.model_fields_set:
-        task.description = payload.description
-    if payload.status is not None:
-        task.status = payload.status.value
-    if "estimate_hours" in payload.model_fields_set:
-        task.estimate_hours = payload.estimate_hours
-    if "due_date" in payload.model_fields_set:
-        task.due_date = payload.due_date
+    new_title = payload.title if payload.title is not None else task.title
+    new_description = (
+        payload.description if "description" in payload.model_fields_set else task.description
+    )
+    new_status = payload.status.value if payload.status is not None else task.status
+    new_assignee = (
+        payload.assignee_id if "assignee_id" in payload.model_fields_set else task.assignee_id
+    )
+    new_estimate = (
+        payload.estimate_hours
+        if "estimate_hours" in payload.model_fields_set
+        else task.estimate_hours
+    )
+    new_due_date = payload.due_date if "due_date" in payload.model_fields_set else task.due_date
 
     after = {
-        "title": task.title,
-        "description": task.description,
-        "status": task.status,
-        "assignee_id": task.assignee_id,
-        "estimate_hours": task.estimate_hours,
-        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "title": new_title,
+        "description": new_description,
+        "status": new_status,
+        "assignee_id": new_assignee,
+        "estimate_hours": new_estimate,
+        "due_date": new_due_date.isoformat() if new_due_date else None,
     }
 
-    task.version += 1
+    now = utc_now()
+    begin_immediate_if_sqlite(db)
+    result = db.execute(
+        update(Task)
+        .where(
+            Task.id == task_id,
+            Task.version == payload.version,
+            Task.deleted_at.is_(None),
+        )
+        .values(
+            title=new_title,
+            description=new_description,
+            status=new_status,
+            assignee_id=new_assignee,
+            estimate_hours=new_estimate,
+            due_date=new_due_date,
+            version=payload.version + 1,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise ConflictError(
+            "Task has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     record_activity(
         db,
         project_id=project_id,
         actor_id=actor_id,
         entity_type=ActivityEntityType.TASK,
-        entity_id=task.id,
+        entity_id=task_id,
         action="task.updated",
         details=compute_diff(before, after),
     )
-    if task.assignee_id and task.assignee_id != before["assignee_id"]:
+    if new_assignee and new_assignee != before["assignee_id"]:
         enqueue_job(
             db,
             "send_notification",
             {
-                "user_id": task.assignee_id,
+                "user_id": new_assignee,
                 "project_id": project_id,
                 "type": "task.assigned",
-                "title": f"Assigned task: {task.title}",
-                "body": f"You were assigned to task '{task.title}'.",
+                "title": f"Assigned task: {new_title}",
+                "body": f"You were assigned to task '{new_title}'.",
                 "entity_type": ActivityEntityType.TASK.value,
-                "entity_id": task.id,
+                "entity_id": task_id,
             },
             project_id=project_id,
             created_by=actor_id,
         )
-    if task.assignee_id and task.status != before["status"]:
+    if new_assignee and new_status != before["status"]:
         enqueue_job(
             db,
             "send_notification",
             {
-                "user_id": task.assignee_id,
+                "user_id": new_assignee,
                 "project_id": project_id,
                 "type": "task.status_changed",
-                "title": f"Task '{task.title}' is now {task.status}",
-                "body": f"Task '{task.title}' changed from {before['status']} to {task.status}.",
+                "title": f"Task '{new_title}' is now {new_status}",
+                "body": f"Task '{new_title}' changed from {before['status']} to {new_status}.",
                 "entity_type": ActivityEntityType.TASK.value,
-                "entity_id": task.id,
+                "entity_id": task_id,
             },
             project_id=project_id,
             created_by=actor_id,
         )
     db.commit()
-    db.refresh(task)
-    return to_task_response(task)
+    updated = db.scalar(select(Task).where(Task.id == task_id))
+    assert updated is not None
+    return to_task_response(updated)
 
 
 def move_task(
@@ -327,15 +354,36 @@ def move_task(
 
 
 def soft_delete_task(db: Session, task: Task, project_id: str, actor_id: str) -> None:
-    task.deleted_at = utc_now()
-    task.version += 1
+    task_id = task.id
+    task_title = task.title
+    story_id = task.story_id
+    expected_version = task.version
+    now = utc_now()
+
+    begin_immediate_if_sqlite(db)
+    result = db.execute(
+        update(Task)
+        .where(
+            Task.id == task_id,
+            Task.version == expected_version,
+            Task.deleted_at.is_(None),
+        )
+        .values(deleted_at=now, version=expected_version + 1, updated_at=now)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise ConflictError(
+            "Task has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     record_activity(
         db,
         project_id=project_id,
         actor_id=actor_id,
         entity_type=ActivityEntityType.TASK,
-        entity_id=task.id,
+        entity_id=task_id,
         action="task.deleted",
-        details={"title": task.title, "story_id": task.story_id},
+        details={"title": task_title, "story_id": story_id},
     )
     db.commit()

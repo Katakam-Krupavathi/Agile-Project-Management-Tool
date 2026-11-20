@@ -153,7 +153,6 @@ def test_story_and_task_optimistic_concurrency_returns_409(client: TestClient) -
     assert t_move_conflict.json()["code"] == "VERSION_CONFLICT"
 
 
-@pytest.mark.xfail(strict=True, reason="Non-atomic Python version check allows lost updates")
 def test_parallel_story_patches_allow_exactly_one_winner(
     client: TestClient,
     db_session_factory: sessionmaker[Session],
@@ -173,7 +172,6 @@ def test_parallel_story_patches_allow_exactly_one_winner(
     assert statuses.count(409) == 19
 
 
-@pytest.mark.xfail(strict=True, reason="Non-atomic Python version check allows lost updates")
 def test_parallel_task_patches_allow_exactly_one_winner(
     client: TestClient,
     db_session_factory: sessionmaker[Session],
@@ -193,7 +191,6 @@ def test_parallel_task_patches_allow_exactly_one_winner(
     assert statuses.count(409) == 11
 
 
-@pytest.mark.xfail(strict=True, reason="Non-atomic Python version check allows lost updates")
 def test_parallel_project_patches_allow_exactly_one_winner(
     client: TestClient,
     db_session_factory: sessionmaker[Session],

@@ -1,11 +1,12 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import decode_cursor, encode_cursor
+from app.db.session import begin_immediate_if_sqlite
 from app.models.activity import ActivityLog
 from app.models.enums import ActivityEntityType, ProjectRole
 from app.models.project import Project, ProjectMember
@@ -140,34 +141,57 @@ def update_project(
     payload: ProjectUpdateRequest,
     actor_id: str,
 ) -> ProjectResponse:
-    if project.version != payload.version:
+    project_id = project.id
+    old_name = project.name
+    old_description = project.description
+    new_name = payload.name if payload.name is not None else old_name
+    new_description = (
+        payload.description if "description" in payload.model_fields_set else old_description
+    )
+
+    changes: dict[str, object] = {}
+    if new_name != old_name:
+        changes["name"] = {"from": old_name, "to": new_name}
+    if new_description != old_description:
+        changes["description"] = {"updated": True}
+
+    now = utc_now()
+    begin_immediate_if_sqlite(db)
+    result = db.execute(
+        update(Project)
+        .where(
+            Project.id == project_id,
+            Project.version == payload.version,
+            Project.deleted_at.is_(None),
+        )
+        .values(
+            name=new_name,
+            description=new_description,
+            version=payload.version + 1,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        db.rollback()
         raise ConflictError(
             "Project has been modified by another request. Reload and retry.",
             code="VERSION_CONFLICT",
         )
 
-    changes: dict[str, object] = {}
-    if payload.name is not None and payload.name != project.name:
-        changes["name"] = {"from": project.name, "to": payload.name}
-        project.name = payload.name
-    if "description" in payload.model_fields_set and payload.description != project.description:
-        changes["description"] = {"updated": True}
-        project.description = payload.description
-
-    project.version += 1
     db.add(
         ActivityLog(
-            project_id=project.id,
+            project_id=project_id,
             actor_id=actor_id,
             entity_type=ActivityEntityType.PROJECT.value,
-            entity_id=project.id,
+            entity_id=project_id,
             action="project.updated",
             details=json.dumps(changes),
         )
     )
     db.commit()
-    db.refresh(project)
-    return to_project_response(project, role)
+    updated = db.scalar(select(Project).where(Project.id == project_id))
+    assert updated is not None
+    return to_project_response(updated, role)
 
 
 def archive_project(
@@ -175,16 +199,36 @@ def archive_project(
     project: Project,
     actor_id: str,
 ) -> None:
-    project.deleted_at = utc_now()
-    project.version += 1
+    project_id = project.id
+    project_key = project.key
+    expected_version = project.version
+    now = utc_now()
+
+    begin_immediate_if_sqlite(db)
+    result = db.execute(
+        update(Project)
+        .where(
+            Project.id == project_id,
+            Project.version == expected_version,
+            Project.deleted_at.is_(None),
+        )
+        .values(deleted_at=now, version=expected_version + 1, updated_at=now)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise ConflictError(
+            "Project has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     db.add(
         ActivityLog(
-            project_id=project.id,
+            project_id=project_id,
             actor_id=actor_id,
             entity_type=ActivityEntityType.PROJECT.value,
-            entity_id=project.id,
+            entity_id=project_id,
             action="project.archived",
-            details=json.dumps({"key": project.key}),
+            details=json.dumps({"key": project_key}),
         )
     )
     db.commit()

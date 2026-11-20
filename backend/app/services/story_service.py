@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequestError, ConflictError
 from app.core.pagination import decode_cursor, encode_cursor
+from app.db.session import begin_immediate_if_sqlite
 from app.jobs.queue import enqueue_job
 from app.models.enums import ActivityEntityType, StoryPriority, StoryStatus
 from app.models.project import Project, ProjectMember
@@ -197,11 +198,13 @@ def update_story(
     payload: StoryUpdateRequest,
     actor_id: str,
 ) -> StoryResponse:
-    if story.version != payload.version:
-        raise ConflictError(
-            "Story has been modified by another request. Reload and retry.",
-            code="VERSION_CONFLICT",
-        )
+    story_id = story.id
+    story_number = story.number
+    project_id = project.id
+    project_key = project.key
+
+    if "assignee_id" in payload.model_fields_set:
+        _validate_assignee(db, project_id, payload.assignee_id)
 
     before = {
         "title": story.title,
@@ -213,77 +216,109 @@ def update_story(
         "assignee_id": story.assignee_id,
     }
 
-    if "assignee_id" in payload.model_fields_set:
-        _validate_assignee(db, project.id, payload.assignee_id)
-        story.assignee_id = payload.assignee_id
-
-    if payload.title is not None:
-        story.title = payload.title
-    if "description" in payload.model_fields_set:
-        story.description = payload.description
-    if "acceptance_criteria" in payload.model_fields_set:
-        story.acceptance_criteria = payload.acceptance_criteria
-    if payload.status is not None:
-        story.status = payload.status.value
-    if payload.priority is not None:
-        story.priority = payload.priority.value
-    if "story_points" in payload.model_fields_set:
-        story.story_points = payload.story_points
+    new_title = payload.title if payload.title is not None else before["title"]
+    new_description = (
+        payload.description if "description" in payload.model_fields_set else before["description"]
+    )
+    new_ac = (
+        payload.acceptance_criteria
+        if "acceptance_criteria" in payload.model_fields_set
+        else before["acceptance_criteria"]
+    )
+    new_status = payload.status.value if payload.status is not None else before["status"]
+    new_priority = payload.priority.value if payload.priority is not None else before["priority"]
+    new_points = (
+        payload.story_points
+        if "story_points" in payload.model_fields_set
+        else before["story_points"]
+    )
+    new_assignee = (
+        payload.assignee_id if "assignee_id" in payload.model_fields_set else before["assignee_id"]
+    )
 
     after = {
-        "title": story.title,
-        "description": story.description,
-        "acceptance_criteria": story.acceptance_criteria,
-        "status": story.status,
-        "priority": story.priority,
-        "story_points": story.story_points,
-        "assignee_id": story.assignee_id,
+        "title": new_title,
+        "description": new_description,
+        "acceptance_criteria": new_ac,
+        "status": new_status,
+        "priority": new_priority,
+        "story_points": new_points,
+        "assignee_id": new_assignee,
     }
-    story.version += 1
+
+    now = utc_now()
+    begin_immediate_if_sqlite(db)
+    result = db.execute(
+        update(Story)
+        .where(
+            Story.id == story_id,
+            Story.version == payload.version,
+            Story.deleted_at.is_(None),
+        )
+        .values(
+            title=new_title,
+            description=new_description,
+            acceptance_criteria=new_ac,
+            status=new_status,
+            priority=new_priority,
+            story_points=new_points,
+            assignee_id=new_assignee,
+            version=payload.version + 1,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise ConflictError(
+            "Story has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     record_activity(
         db,
-        project_id=project.id,
+        project_id=project_id,
         actor_id=actor_id,
         entity_type=ActivityEntityType.STORY,
-        entity_id=story.id,
+        entity_id=story_id,
         action="story.updated",
         details=compute_diff(before, after),
     )
-    if story.assignee_id and story.assignee_id != before["assignee_id"]:
+    if new_assignee and new_assignee != before["assignee_id"]:
         enqueue_job(
             db,
             "send_notification",
             {
-                "user_id": story.assignee_id,
-                "project_id": project.id,
+                "user_id": new_assignee,
+                "project_id": project_id,
                 "type": "story.assigned",
-                "title": f"Assigned to {project.key}-{story.number}: {story.title}",
-                "body": f"You were assigned to story {project.key}-{story.number}.",
+                "title": f"Assigned to {project_key}-{story_number}: {new_title}",
+                "body": f"You were assigned to story {project_key}-{story_number}.",
                 "entity_type": ActivityEntityType.STORY.value,
-                "entity_id": story.id,
+                "entity_id": story_id,
             },
-            project_id=project.id,
+            project_id=project_id,
             created_by=actor_id,
         )
-    if story.assignee_id and story.status != before["status"]:
+    if new_assignee and new_status != before["status"]:
         enqueue_job(
             db,
             "send_notification",
             {
-                "user_id": story.assignee_id,
-                "project_id": project.id,
+                "user_id": new_assignee,
+                "project_id": project_id,
                 "type": "story.status_changed",
-                "title": f"{project.key}-{story.number} moved to {story.status}",
-                "body": f"Story '{story.title}' changed from {before['status']} to {story.status}.",
+                "title": f"{project_key}-{story_number} moved to {new_status}",
+                "body": f"Story '{new_title}' changed from {before['status']} to {new_status}.",
                 "entity_type": ActivityEntityType.STORY.value,
-                "entity_id": story.id,
+                "entity_id": story_id,
             },
-            project_id=project.id,
+            project_id=project_id,
             created_by=actor_id,
         )
     db.commit()
-    db.refresh(story)
-    return to_story_response(story, project.key)
+    updated = db.scalar(select(Story).where(Story.id == story_id))
+    assert updated is not None
+    return to_story_response(updated, project_key)
 
 
 def move_story(
@@ -383,21 +418,41 @@ def move_story(
 
 
 def soft_delete_story(db: Session, story: Story, actor_id: str) -> None:
+    story_id = story.id
+    project_id = story.project_id
+    story_title = story.title
+    expected_version = story.version
     now = utc_now()
-    story.deleted_at = now
-    story.version += 1
+
+    begin_immediate_if_sqlite(db)
+    result = db.execute(
+        update(Story)
+        .where(
+            Story.id == story_id,
+            Story.version == expected_version,
+            Story.deleted_at.is_(None),
+        )
+        .values(deleted_at=now, version=expected_version + 1, updated_at=now)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise ConflictError(
+            "Story has been modified by another request. Reload and retry.",
+            code="VERSION_CONFLICT",
+        )
+
     db.execute(
         update(Task)
-        .where(Task.story_id == story.id, Task.deleted_at.is_(None))
-        .values(deleted_at=now, version=Task.version + 1)
+        .where(Task.story_id == story_id, Task.deleted_at.is_(None))
+        .values(deleted_at=now, version=Task.version + 1, updated_at=now)
     )
     record_activity(
         db,
-        project_id=story.project_id,
+        project_id=project_id,
         actor_id=actor_id,
         entity_type=ActivityEntityType.STORY,
-        entity_id=story.id,
+        entity_id=story_id,
         action="story.deleted",
-        details={"title": story.title},
+        details={"title": story_title},
     )
     db.commit()
