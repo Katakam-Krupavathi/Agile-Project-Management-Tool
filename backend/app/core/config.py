@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     app_name: str = "Agile Project Management Tool"
     app_env: str = "development"
     debug: bool = False
+    enable_api_docs: bool | None = None
     api_v1_prefix: str = "/api/v1"
     cors_origins: list[str] = ["http://localhost:5173"]
     database_url: str = "sqlite:///./data/agile_pm.db"
@@ -59,6 +60,8 @@ class Settings(BaseSettings):
         is_prod = self.app_env.strip().lower() == "production"
         if self.session_cookie_secure is None:
             self.session_cookie_secure = is_prod
+        if self.enable_api_docs is None:
+            self.enable_api_docs = not is_prod
         if is_prod and (
             self.secret_key in _INSECURE_SECRET_KEYS or len(self.secret_key.strip()) < 32
         ):

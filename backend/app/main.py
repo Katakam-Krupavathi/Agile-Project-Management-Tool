@@ -9,12 +9,13 @@ from app.core.middleware import RequestSizeLimitMiddleware, SecurityHeadersMiddl
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    docs_enabled = bool(settings.enable_api_docs)
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     register_exception_handlers(app)

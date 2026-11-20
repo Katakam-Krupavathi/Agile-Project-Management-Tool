@@ -352,6 +352,7 @@ def test_production_defaults_reject_weak_secret_and_enable_secure_cookie(
         secret_key="prod-secret-key-with-at-least-32-characters-long!",
     )
     assert prod_settings.session_cookie_secure is True
+    assert prod_settings.enable_api_docs is False
 
     app = create_app(prod_settings)
 
@@ -366,6 +367,8 @@ def test_production_defaults_reject_weak_secret_and_enable_secure_cookie(
     app.dependency_overrides[get_settings] = lambda: prod_settings
 
     with TestClient(app, base_url="https://testserver") as prod_client:
+        assert prod_client.get("/docs").status_code == 404
+        assert prod_client.get("/openapi.json").status_code == 404
         reg = prod_client.post(
             "/api/v1/auth/register",
             json={
