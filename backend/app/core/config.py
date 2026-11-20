@@ -1,7 +1,16 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_DEV_SECRET_KEY = "dev-insecure-secret-key-change-in-production"
+_INSECURE_SECRET_KEYS = frozenset(
+    {
+        DEFAULT_DEV_SECRET_KEY,
+        "change-me-to-a-long-random-secret",
+        "change-me-in-production-to-a-long-random-string",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -17,12 +26,13 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     cors_origins: list[str] = ["http://localhost:5173"]
     database_url: str = "sqlite:///./data/agile_pm.db"
-    secret_key: str = "dev-insecure-secret-key-change-in-production"
+    secret_key: str = DEFAULT_DEV_SECRET_KEY
     session_cookie_name: str = "agile_pm_session"
-    session_cookie_secure: bool = False
+    session_cookie_secure: bool | None = None
     session_max_age_seconds: int = 60 * 60 * 24 * 7
     csrf_cookie_name: str = "agile_pm_csrf"
     csrf_header_name: str = "X-CSRF-Token"
+    forwarded_allow_ips: str = "127.0.0.1"
     login_rate_limit_max_attempts: int = 5
     login_rate_limit_window_seconds: int = 60
     login_ip_rate_limit_max_attempts: int = 15
@@ -43,6 +53,19 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        is_prod = self.app_env.strip().lower() == "production"
+        if self.session_cookie_secure is None:
+            self.session_cookie_secure = is_prod
+        if is_prod and (
+            self.secret_key in _INSECURE_SECRET_KEYS or len(self.secret_key.strip()) < 32
+        ):
+            raise ValueError(
+                "SECRET_KEY must be a non-default secret of at least 32 characters in production."
+            )
+        return self
 
 
 @lru_cache

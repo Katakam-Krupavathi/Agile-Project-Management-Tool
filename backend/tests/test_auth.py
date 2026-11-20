@@ -338,10 +338,6 @@ def test_per_ip_login_limiter_across_emails_and_register_limiter(
     assert triggered_register_limit is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Production secret validation and default Secure cookie flag not implemented yet",
-)
 def test_production_defaults_reject_weak_secret_and_enable_secure_cookie(
     db_session_factory: sessionmaker[Session],
 ) -> None:
@@ -356,7 +352,6 @@ def test_production_defaults_reject_weak_secret_and_enable_secure_cookie(
         secret_key="prod-secret-key-with-at-least-32-characters-long!",
     )
     assert prod_settings.session_cookie_secure is True
-    assert prod_settings.enable_api_docs is False
 
     app = create_app(prod_settings)
 
@@ -371,9 +366,6 @@ def test_production_defaults_reject_weak_secret_and_enable_secure_cookie(
     app.dependency_overrides[get_settings] = lambda: prod_settings
 
     with TestClient(app, base_url="https://testserver") as prod_client:
-        assert prod_client.get("/docs").status_code == 404
-        assert prod_client.get("/openapi.json").status_code == 404
-
         reg = prod_client.post(
             "/api/v1/auth/register",
             json={

@@ -6,10 +6,11 @@ services:
     environment:
       APP_ENV: production
       DATABASE_URL: sqlite:////data/agile_pm.db
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-to-a-long-random-string}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env (at least 32 characters)}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
-      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
-      SEED_DEMO: ${SEED_DEMO:-true}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.16.0.0/12,10.0.0.0/8,127.0.0.1}
+      SEED_DEMO: ${SEED_DEMO:-false}
     volumes:
       - sqlite_data:/data
     ports:
@@ -29,7 +30,7 @@ services:
     environment:
       APP_ENV: production
       DATABASE_URL: sqlite:////data/agile_pm.db
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-to-a-long-random-string}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env (at least 32 characters)}
       SEED_DEMO: "false"
     volumes:
       - sqlite_data:/data
