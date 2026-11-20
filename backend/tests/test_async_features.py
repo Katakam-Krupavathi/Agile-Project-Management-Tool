@@ -1,11 +1,21 @@
+import asyncio
+import time
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import get_settings
+from app.core.security import create_session_token, hash_password
+from app.db.session import get_db
 from app.jobs.worker import process_next_job, schedule_due_soon_reminders
+from app.main import create_app
 from app.models.enums import JobStatus
+from app.models.user import User
 from app.services.mailer import ConsoleMailer, set_mailer
 from app.services.report_service import set_report_failure_hook
 
@@ -332,3 +342,125 @@ def test_report_generation_idempotency_injectable_failure_retry_and_download(
     assert "## Blocked Items" in md
     assert "## Overdue Tasks" in md
     assert "## Recent Activity" in md
+
+
+@asynccontextmanager
+async def _open_asgi_sse_stream(
+    app: FastAPI,
+    session_cookie: str,
+    *,
+    query_string: str = "",
+) -> Any:
+    settings = get_settings()
+    receive_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    await receive_queue.put({"type": "http.request", "body": b"", "more_body": False})
+
+    cookie_header = f"{settings.session_cookie_name}={session_cookie}".encode("latin-1")
+    scope: dict[str, Any] = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/v1/notifications/stream",
+        "raw_path": b"/api/v1/notifications/stream",
+        "query_string": query_string.encode("latin-1"),
+        "headers": [(b"cookie", cookie_header)],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+
+    async def receive() -> dict[str, Any]:
+        return await receive_queue.get()
+
+    async def send(message: dict[str, Any]) -> None:
+        await send_queue.put(message)
+
+    task = asyncio.create_task(app(scope, receive, send))
+    try:
+        start_msg = await asyncio.wait_for(send_queue.get(), timeout=2.0)
+        assert start_msg["type"] == "http.response.start"
+        status_code = int(start_msg["status"])
+        first_body = await asyncio.wait_for(send_queue.get(), timeout=2.0)
+        assert first_body["type"] == "http.response.body"
+        # Allow the generator to execute its first poll before pausing at sleep
+        await asyncio.sleep(0.05)
+        yield {
+            "status": status_code,
+            "first_chunk": first_body.get("body", b"").decode("utf-8", errors="replace"),
+            "send_queue": send_queue,
+            "task": task,
+        }
+    finally:
+        await receive_queue.put({"type": "http.disconnect"})
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except Exception:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="GET /notifications/stream holds Depends(get_db) for the stream lifetime",
+)
+def test_twenty_open_sse_streams_do_not_exhaust_db_pool(
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    engine = db_session_factory.kw["bind"]
+    original_timeout = getattr(engine.pool, "_timeout", 30.0)
+    engine.pool._timeout = 0.5
+
+    app = create_app()
+
+    def override_get_db() -> Any:
+        db = db_session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    settings = get_settings()
+    pw_hash = hash_password("StrongPassword123")
+    cookies: list[str] = []
+    with db_session_factory() as db:
+        users = [
+            User(
+                email=f"stream_user_{idx}@example.com",
+                name=f"Stream User {idx}",
+                password_hash=pw_hash,
+            )
+            for idx in range(20)
+        ]
+        db.add_all(users)
+        db.commit()
+        for u in users:
+            cookies.append(create_session_token(u.id, settings.secret_key))
+
+    async def _run() -> None:
+        async with AsyncExitStack() as stack:
+            streams = []
+            for cookie in cookies:
+                stream = await stack.enter_async_context(_open_asgi_sse_stream(app, cookie))
+                assert stream["status"] == 200
+                assert "retry: 3000" in stream["first_chunk"]
+                streams.append(stream)
+
+            assert len(streams) == 20
+
+            # Normal API request while all 20 streams are open must succeed quickly
+            t0 = time.monotonic()
+            with TestClient(app) as normal_client:
+                normal_client.cookies.set(settings.session_cookie_name, cookies[0])
+                resp = normal_client.get("/api/v1/notifications")
+            elapsed = time.monotonic() - t0
+            assert resp.status_code == 200, resp.text
+            assert elapsed < 1.0
+
+    try:
+        asyncio.run(_run())
+    finally:
+        engine.pool._timeout = original_timeout
