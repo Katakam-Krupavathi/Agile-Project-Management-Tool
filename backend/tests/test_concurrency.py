@@ -1,7 +1,15 @@
+import threading
+from collections.abc import Generator
+
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.db.session import get_db
+from app.main import create_app
 
 
-def _setup_story_and_task(client: TestClient) -> tuple[dict[str, str], dict, dict]:
+def _setup_story_and_task(client: TestClient) -> tuple[dict[str, str], dict, dict, dict]:
     client.post(
         "/api/v1/auth/register",
         json={"email": "occ@example.com", "name": "OCC User", "password": "StrongPassword123"},
@@ -26,11 +34,50 @@ def _setup_story_and_task(client: TestClient) -> tuple[dict[str, str], dict, dic
         json={"title": "Original Task"},
         headers=headers,
     ).json()
-    return headers, story, task
+    return headers, project, story, task
+
+
+def _run_parallel_patches(
+    db_session_factory: sessionmaker[Session],
+    cookies: dict[str, str],
+    headers: dict[str, str],
+    path: str,
+    payload_factory,
+    num_threads: int,
+) -> list[int]:
+    app = create_app()
+
+    def override_get_db() -> Generator[Session, None, None]:
+        db = db_session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    barrier = threading.Barrier(num_threads)
+    statuses: list[int] = []
+    lock = threading.Lock()
+
+    def worker(idx: int) -> None:
+        with TestClient(app) as tc:
+            for k, v in cookies.items():
+                tc.cookies.set(k, v)
+            barrier.wait()
+            res = tc.patch(path, json=payload_factory(idx), headers=headers)
+            with lock:
+                statuses.append(res.status_code)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return statuses
 
 
 def test_story_and_task_optimistic_concurrency_returns_409(client: TestClient) -> None:
-    headers, story, task = _setup_story_and_task(client)
+    headers, _project, story, task = _setup_story_and_task(client)
 
     # Missing version rejected with 422
     assert (
@@ -104,3 +151,85 @@ def test_story_and_task_optimistic_concurrency_returns_409(client: TestClient) -
     )
     assert t_move_conflict.status_code == 409
     assert t_move_conflict.json()["code"] == "VERSION_CONFLICT"
+
+
+@pytest.mark.xfail(strict=True, reason="Non-atomic Python version check allows lost updates")
+def test_parallel_story_patches_allow_exactly_one_winner(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    headers, _project, story, _task = _setup_story_and_task(client)
+    cookies = dict(client.cookies)
+
+    statuses = _run_parallel_patches(
+        db_session_factory,
+        cookies,
+        headers,
+        f"/api/v1/stories/{story['id']}",
+        lambda i: {"title": f"Race Story {i}", "version": 1},
+        num_threads=20,
+    )
+    assert statuses.count(200) == 1
+    assert statuses.count(409) == 19
+
+
+@pytest.mark.xfail(strict=True, reason="Non-atomic Python version check allows lost updates")
+def test_parallel_task_patches_allow_exactly_one_winner(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    headers, _project, _story, task = _setup_story_and_task(client)
+    cookies = dict(client.cookies)
+
+    statuses = _run_parallel_patches(
+        db_session_factory,
+        cookies,
+        headers,
+        f"/api/v1/tasks/{task['id']}",
+        lambda i: {"title": f"Race Task {i}", "version": 1},
+        num_threads=12,
+    )
+    assert statuses.count(200) == 1
+    assert statuses.count(409) == 11
+
+
+@pytest.mark.xfail(strict=True, reason="Non-atomic Python version check allows lost updates")
+def test_parallel_project_patches_allow_exactly_one_winner(
+    client: TestClient,
+    db_session_factory: sessionmaker[Session],
+) -> None:
+    headers, project, _story, _task = _setup_story_and_task(client)
+    cookies = dict(client.cookies)
+
+    statuses = _run_parallel_patches(
+        db_session_factory,
+        cookies,
+        headers,
+        f"/api/v1/projects/{project['id']}",
+        lambda i: {"name": f"Race Project {i}", "version": 1},
+        num_threads=12,
+    )
+    assert statuses.count(200) == 1
+    assert statuses.count(409) == 11
+
+
+@pytest.mark.xfail(strict=True, reason="Move endpoints currently treat version as optional")
+def test_move_endpoints_require_version(client: TestClient) -> None:
+    headers, _project, story, task = _setup_story_and_task(client)
+
+    assert (
+        client.post(
+            f"/api/v1/stories/{story['id']}/move",
+            json={"status": "in_progress"},
+            headers=headers,
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"/api/v1/tasks/{task['id']}/move",
+            json={"status": "doing"},
+            headers=headers,
+        ).status_code
+        == 422
+    )
