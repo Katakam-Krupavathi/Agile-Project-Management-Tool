@@ -17,7 +17,7 @@ from app.schemas.story import (
     StoryUpdateRequest,
 )
 from app.services.activity import compute_diff, record_activity
-from app.services.ranking import RANK_STEP, compute_insert_position, rebalance_positions
+from app.services.ranking import RANK_STEP, compute_insert_position
 
 
 def to_story_response(story: Story, project_key: str) -> StoryResponse:
@@ -328,24 +328,29 @@ def move_story(
     payload: StoryMoveRequest,
     actor_id: str,
 ) -> StoryResponse:
-    if payload.version is not None and story.version != payload.version:
-        raise ConflictError(
-            "Story has been modified by another request. Reload and retry.",
-            code="VERSION_CONFLICT",
-        )
-    if payload.before_id == story.id or payload.after_id == story.id:
+    story_id = story.id
+    story_number = story.number
+    story_title = story.title
+    story_assignee_id = story.assignee_id
+    project_id = project.id
+    project_key = project.key
+    before = {"status": story.status, "position": story.position}
+
+    if payload.before_id == story_id or payload.after_id == story_id:
         raise BadRequestError("Cannot position a story relative to itself.", code="INVALID_MOVE")
 
-    before = {"status": story.status, "position": story.position}
     target_status = payload.status.value
+    now = utc_now()
+
+    begin_immediate_if_sqlite(db)
     siblings = list(
         db.scalars(
             select(Story)
             .where(
-                Story.project_id == project.id,
+                Story.project_id == project_id,
                 Story.status == target_status,
                 Story.deleted_at.is_(None),
-                Story.id != story.id,
+                Story.id != story_id,
             )
             .order_by(Story.position.asc(), Story.id.asc())
         ).all()
@@ -356,10 +361,12 @@ def move_story(
     after_story = sibling_by_id.get(payload.after_id) if payload.after_id else None
 
     if payload.before_id and before_story is None:
+        db.rollback()
         raise BadRequestError(
             "Reference before_id not found in target column.", code="INVALID_MOVE"
         )
     if payload.after_id and after_story is None:
+        db.rollback()
         raise BadRequestError(
             "Reference after_id not found in target column.", code="INVALID_MOVE"
         )
@@ -371,50 +378,101 @@ def move_story(
         before_pos = siblings[-1].position
 
     new_pos, needs_rebalance = compute_insert_position(before_pos, after_pos)
-    story.status = target_status
 
     if needs_rebalance:
-        ordered = list(siblings)
+        placeholder = object()
+        ordered: list[object] = list(siblings)
         if before_story is not None:
             insert_idx = ordered.index(before_story) + 1
         elif after_story is not None:
             insert_idx = ordered.index(after_story)
         else:
             insert_idx = len(ordered)
-        ordered.insert(insert_idx, story)
-        rebalance_positions(ordered, lambda item, pos: setattr(item, "position", pos))
-    else:
-        story.position = new_pos
+        ordered.insert(insert_idx, placeholder)
+        new_positions: dict[str, float] = {}
+        for idx, item in enumerate(ordered, start=1):
+            pos = float(idx) * RANK_STEP
+            if item is placeholder:
+                new_pos = pos
+            else:
+                assert isinstance(item, Story)
+                new_positions[item.id] = pos
 
-    story.version += 1
+        result = db.execute(
+            update(Story)
+            .where(
+                Story.id == story_id,
+                Story.version == payload.version,
+                Story.deleted_at.is_(None),
+            )
+            .values(
+                status=target_status,
+                position=new_pos,
+                version=payload.version + 1,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise ConflictError(
+                "Story has been modified by another request. Reload and retry.",
+                code="VERSION_CONFLICT",
+            )
+        for sib_id, sib_pos in new_positions.items():
+            db.execute(update(Story).where(Story.id == sib_id).values(position=sib_pos))
+    else:
+        result = db.execute(
+            update(Story)
+            .where(
+                Story.id == story_id,
+                Story.version == payload.version,
+                Story.deleted_at.is_(None),
+            )
+            .values(
+                status=target_status,
+                position=new_pos,
+                version=payload.version + 1,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise ConflictError(
+                "Story has been modified by another request. Reload and retry.",
+                code="VERSION_CONFLICT",
+            )
+
     record_activity(
         db,
-        project_id=project.id,
+        project_id=project_id,
         actor_id=actor_id,
         entity_type=ActivityEntityType.STORY,
-        entity_id=story.id,
+        entity_id=story_id,
         action="story.moved",
-        details=compute_diff(before, {"status": story.status, "position": story.position}),
+        details=compute_diff(before, {"status": target_status, "position": new_pos}),
     )
-    if story.assignee_id and story.status != before["status"]:
+    if story_assignee_id and target_status != before["status"]:
         enqueue_job(
             db,
             "send_notification",
             {
-                "user_id": story.assignee_id,
-                "project_id": project.id,
+                "user_id": story_assignee_id,
+                "project_id": project_id,
                 "type": "story.status_changed",
-                "title": f"{project.key}-{story.number} moved to {story.status}",
-                "body": f"Story '{story.title}' changed from {before['status']} to {story.status}.",
+                "title": f"{project_key}-{story_number} moved to {target_status}",
+                "body": (
+                    f"Story '{story_title}' changed from {before['status']} to {target_status}."
+                ),
                 "entity_type": ActivityEntityType.STORY.value,
-                "entity_id": story.id,
+                "entity_id": story_id,
             },
-            project_id=project.id,
+            project_id=project_id,
             created_by=actor_id,
         )
     db.commit()
-    db.refresh(story)
-    return to_story_response(story, project.key)
+    updated = db.scalar(select(Story).where(Story.id == story_id))
+    assert updated is not None
+    return to_story_response(updated, project_key)
 
 
 def soft_delete_story(db: Session, story: Story, actor_id: str) -> None:

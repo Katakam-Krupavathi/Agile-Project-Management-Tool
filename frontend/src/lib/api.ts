@@ -246,7 +246,7 @@ export const storiesApi = {
       status: StoryStatus;
       before_id?: string | null;
       after_id?: string | null;
-      version?: number;
+      version: number;
     },
   ) => apiRequest<Story>(`/stories/${storyId}/move`, { method: 'POST', body: payload }),
 
@@ -285,7 +285,7 @@ export const tasksApi = {
       before_id?: string | null;
       after_id?: string | null;
       status?: TaskStatus | null;
-      version?: number;
+      version: number;
     },
   ) => apiRequest<Task>(`/tasks/${taskId}/move`, { method: 'POST', body: payload }),
 

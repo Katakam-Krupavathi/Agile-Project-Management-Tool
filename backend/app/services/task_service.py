@@ -12,7 +12,7 @@ from app.models.task import Task
 from app.models.user import utc_now
 from app.schemas.task import TaskCreateRequest, TaskMoveRequest, TaskResponse, TaskUpdateRequest
 from app.services.activity import compute_diff, record_activity
-from app.services.ranking import RANK_STEP, compute_insert_position, rebalance_positions
+from app.services.ranking import RANK_STEP, compute_insert_position
 
 
 def to_task_response(task: Task) -> TaskResponse:
@@ -269,22 +269,26 @@ def move_task(
     payload: TaskMoveRequest,
     actor_id: str,
 ) -> TaskResponse:
-    if payload.version is not None and task.version != payload.version:
-        raise ConflictError(
-            "Task has been modified by another request. Reload and retry.",
-            code="VERSION_CONFLICT",
-        )
-    if payload.before_id == task.id or payload.after_id == task.id:
+    task_id = task.id
+    story_id = task.story_id
+    task_title = task.title
+    task_assignee_id = task.assignee_id
+    before = {"status": task.status, "position": task.position}
+
+    if payload.before_id == task_id or payload.after_id == task_id:
         raise BadRequestError("Cannot position a task relative to itself.", code="INVALID_MOVE")
 
-    before = {"status": task.status, "position": task.position}
+    target_status = payload.status.value if payload.status is not None else task.status
+    now = utc_now()
+
+    begin_immediate_if_sqlite(db)
     siblings = list(
         db.scalars(
             select(Task)
             .where(
-                Task.story_id == task.story_id,
+                Task.story_id == story_id,
                 Task.deleted_at.is_(None),
-                Task.id != task.id,
+                Task.id != task_id,
             )
             .order_by(Task.position.asc(), Task.id.asc())
         ).all()
@@ -295,8 +299,10 @@ def move_task(
     after_task = sibling_by_id.get(payload.after_id) if payload.after_id else None
 
     if payload.before_id and before_task is None:
+        db.rollback()
         raise BadRequestError("Reference before_id not found in story.", code="INVALID_MOVE")
     if payload.after_id and after_task is None:
+        db.rollback()
         raise BadRequestError("Reference after_id not found in story.", code="INVALID_MOVE")
 
     before_pos = before_task.position if before_task is not None else None
@@ -306,51 +312,99 @@ def move_task(
         before_pos = siblings[-1].position
 
     new_pos, needs_rebalance = compute_insert_position(before_pos, after_pos)
-    if payload.status is not None:
-        task.status = payload.status.value
 
     if needs_rebalance:
-        ordered = list(siblings)
+        placeholder = object()
+        ordered: list[object] = list(siblings)
         if before_task is not None:
             insert_idx = ordered.index(before_task) + 1
         elif after_task is not None:
             insert_idx = ordered.index(after_task)
         else:
             insert_idx = len(ordered)
-        ordered.insert(insert_idx, task)
-        rebalance_positions(ordered, lambda item, pos: setattr(item, "position", pos))
-    else:
-        task.position = new_pos
+        ordered.insert(insert_idx, placeholder)
+        new_positions: dict[str, float] = {}
+        for idx, item in enumerate(ordered, start=1):
+            pos = float(idx) * RANK_STEP
+            if item is placeholder:
+                new_pos = pos
+            else:
+                assert isinstance(item, Task)
+                new_positions[item.id] = pos
 
-    task.version += 1
+        result = db.execute(
+            update(Task)
+            .where(
+                Task.id == task_id,
+                Task.version == payload.version,
+                Task.deleted_at.is_(None),
+            )
+            .values(
+                status=target_status,
+                position=new_pos,
+                version=payload.version + 1,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise ConflictError(
+                "Task has been modified by another request. Reload and retry.",
+                code="VERSION_CONFLICT",
+            )
+        for sib_id, sib_pos in new_positions.items():
+            db.execute(update(Task).where(Task.id == sib_id).values(position=sib_pos))
+    else:
+        result = db.execute(
+            update(Task)
+            .where(
+                Task.id == task_id,
+                Task.version == payload.version,
+                Task.deleted_at.is_(None),
+            )
+            .values(
+                status=target_status,
+                position=new_pos,
+                version=payload.version + 1,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise ConflictError(
+                "Task has been modified by another request. Reload and retry.",
+                code="VERSION_CONFLICT",
+            )
+
     record_activity(
         db,
         project_id=project_id,
         actor_id=actor_id,
         entity_type=ActivityEntityType.TASK,
-        entity_id=task.id,
+        entity_id=task_id,
         action="task.moved",
-        details=compute_diff(before, {"status": task.status, "position": task.position}),
+        details=compute_diff(before, {"status": target_status, "position": new_pos}),
     )
-    if task.assignee_id and task.status != before["status"]:
+    if task_assignee_id and target_status != before["status"]:
         enqueue_job(
             db,
             "send_notification",
             {
-                "user_id": task.assignee_id,
+                "user_id": task_assignee_id,
                 "project_id": project_id,
                 "type": "task.status_changed",
-                "title": f"Task '{task.title}' is now {task.status}",
-                "body": f"Task '{task.title}' changed from {before['status']} to {task.status}.",
+                "title": f"Task '{task_title}' is now {target_status}",
+                "body": f"Task '{task_title}' changed from {before['status']} to {target_status}.",
                 "entity_type": ActivityEntityType.TASK.value,
-                "entity_id": task.id,
+                "entity_id": task_id,
             },
             project_id=project_id,
             created_by=actor_id,
         )
     db.commit()
-    db.refresh(task)
-    return to_task_response(task)
+    updated = db.scalar(select(Task).where(Task.id == task_id))
+    assert updated is not None
+    return to_task_response(updated)
 
 
 def soft_delete_task(db: Session, task: Task, project_id: str, actor_id: str) -> None:

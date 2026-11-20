@@ -50,7 +50,12 @@ def test_task_crud_move_and_story_cascade_soft_delete(client: TestClient) -> Non
     # Reorder Task 3 between Task 1 and Task 2
     moved = client.post(
         f"/api/v1/tasks/{t3.json()['id']}/move",
-        json={"before_id": t1.json()["id"], "after_id": t2.json()["id"], "status": "doing"},
+        json={
+            "before_id": t1.json()["id"],
+            "after_id": t2.json()["id"],
+            "status": "doing",
+            "version": t3.json()["version"],
+        },
         headers=headers,
     )
     assert moved.status_code == 200

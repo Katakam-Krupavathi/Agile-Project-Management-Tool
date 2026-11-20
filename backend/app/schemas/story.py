@@ -48,7 +48,7 @@ class StoryMoveRequest(BaseModel):
     status: StoryStatus
     before_id: str | None = Field(default=None, max_length=36)
     after_id: str | None = Field(default=None, max_length=36)
-    version: int | None = Field(default=None, ge=1)
+    version: int = Field(ge=1)
 
 
 class StoryResponse(BaseModel):

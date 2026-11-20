@@ -67,6 +67,7 @@ def test_story_crud_numbering_filtering_move_and_delete(client: TestClient) -> N
             "status": "backlog",
             "before_id": s1.json()["id"],
             "after_id": s2.json()["id"],
+            "version": s3.json()["version"],
         },
         headers=headers,
     )

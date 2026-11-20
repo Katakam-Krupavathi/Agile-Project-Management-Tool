@@ -118,7 +118,7 @@ export function useMoveStory(projectId: string) {
         status: StoryStatus;
         before_id?: string | null;
         after_id?: string | null;
-        version?: number;
+        version: number;
       };
     }) => storiesApi.move(storyId, payload),
     onMutate: async ({ storyId, payload }) => {
@@ -256,7 +256,7 @@ export function useMoveTask(projectId: string) {
         before_id?: string | null;
         after_id?: string | null;
         status?: TaskStatus | null;
-        version?: number;
+        version: number;
       };
     }) => tasksApi.move(taskId, payload),
     onSuccess: () => {

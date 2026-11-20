@@ -34,7 +34,7 @@ def test_activity_log_records_all_mutations_with_diffs_and_pagination(client: Te
     )
     client.post(
         f"/api/v1/stories/{story['id']}/move",
-        json={"status": "in_progress"},
+        json={"status": "in_progress", "version": 2},
         headers=headers,
     )
 

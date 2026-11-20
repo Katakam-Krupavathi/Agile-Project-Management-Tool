@@ -1,7 +1,6 @@
 import threading
 from collections.abc import Generator
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -210,7 +209,6 @@ def test_parallel_project_patches_allow_exactly_one_winner(
     assert statuses.count(409) == 11
 
 
-@pytest.mark.xfail(strict=True, reason="Move endpoints currently treat version as optional")
 def test_move_endpoints_require_version(client: TestClient) -> None:
     headers, _project, story, task = _setup_story_and_task(client)
 
