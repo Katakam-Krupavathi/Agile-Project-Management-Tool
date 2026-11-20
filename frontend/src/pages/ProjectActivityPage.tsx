@@ -7,7 +7,7 @@ import { Avatar, Badge, Button, EmptyState, ErrorState, Skeleton } from '../comp
 import { useCurrentUser, useLogout } from '../hooks/useAuth';
 import { useProjects, useProjectTree } from '../hooks/useProjects';
 import { projectsApi } from '../lib/api';
-import { STORY_STATUS_LABELS, TASK_STATUS_LABELS } from '../lib/labels';
+import { parseUtcTimestamp, STORY_STATUS_LABELS, TASK_STATUS_LABELS } from '../lib/labels';
 import type { ActivityLog, StoryStatus, TaskStatus } from '../lib/types';
 
 function formatStatusLabel(value: unknown): string {
@@ -141,7 +141,7 @@ export function ProjectActivityPage() {
                   <div>
                     <p className="text-sm text-neutral-900">{formatActivityMessage(entry)}</p>
                     <p className="mt-0.5 text-xs text-neutral-500">
-                      {new Date(entry.created_at).toLocaleString()}
+                      {parseUtcTimestamp(entry.created_at).toLocaleString()}
                     </p>
                   </div>
                 </div>

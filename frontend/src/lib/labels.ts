@@ -42,8 +42,24 @@ export const TASK_STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
   { value: 'done', label: 'Done' },
 ];
 
-export function isTaskOverdue(task: Pick<Task, 'due_date' | 'status'>): boolean {
+export function parseUtcTimestamp(isoTimestamp: string): Date {
+  const trimmed = isoTimestamp.trim();
+  const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed);
+  return new Date(hasTimezone ? trimmed : `${trimmed}Z`);
+}
+
+export function formatLocalDateKey(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function isTaskOverdue(
+  task: Pick<Task, 'due_date' | 'status'>,
+  now: Date = new Date(),
+): boolean {
   if (!task.due_date || task.status === 'done') return false;
-  const today = new Date().toISOString().slice(0, 10);
-  return task.due_date < today;
+  const todayLocal = formatLocalDateKey(now);
+  return task.due_date < todayLocal;
 }

@@ -7,6 +7,7 @@ import {
   useNotifications,
   useNotificationStream,
 } from '../../hooks/useNotifications';
+import { parseUtcTimestamp } from '../../lib/labels';
 import type { Notification } from '../../lib/types';
 
 export function NotificationsBell() {
@@ -130,7 +131,7 @@ export function NotificationsBell() {
                           </p>
                         )}
                         <p className="mt-1 text-[11px] text-neutral-500">
-                          {new Date(item.created_at).toLocaleString()}
+                          {parseUtcTimestamp(item.created_at).toLocaleString()}
                         </p>
                       </div>
                     </button>

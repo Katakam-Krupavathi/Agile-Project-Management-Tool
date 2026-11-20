@@ -11,6 +11,7 @@ import {
 import { Avatar, Badge, Button, Drawer, Input, ProgressRail, Select } from '../ui';
 import {
   isTaskOverdue,
+  parseUtcTimestamp,
   STORY_PRIORITY_LABELS,
   STORY_PRIORITY_OPTIONS,
   STORY_STATUS_LABELS,
@@ -596,7 +597,7 @@ export function StoryFocusDrawer({
                       <code className="font-mono text-brand">{entry.action}</code>
                     </span>
                     <span className="text-neutral-500">
-                      {new Date(entry.created_at).toLocaleString()}
+                      {parseUtcTimestamp(entry.created_at).toLocaleString()}
                     </span>
                   </div>
                 </li>

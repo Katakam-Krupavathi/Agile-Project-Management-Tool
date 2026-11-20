@@ -16,6 +16,7 @@ import {
   useRetryJob,
 } from '../hooks/useReports';
 import { reportsApi } from '../lib/api';
+import { parseUtcTimestamp } from '../lib/labels';
 import { canEditProjectItems, canManageProject } from '../lib/permissions';
 
 export function ProjectReportsPage() {
@@ -128,7 +129,7 @@ export function ProjectReportsPage() {
                   <div>
                     <p className="text-sm font-medium text-neutral-900">{report.title}</p>
                     <p className="text-xs text-neutral-500">
-                      Generated {new Date(report.created_at).toLocaleString()}
+                      Generated {parseUtcTimestamp(report.created_at).toLocaleString()}
                     </p>
                   </div>
                 </div>

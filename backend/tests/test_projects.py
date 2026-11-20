@@ -105,3 +105,33 @@ def test_project_crud_pagination_version_and_archive(client: TestClient) -> None
     assert client.get(f"/api/v1/projects/{p1['id']}").status_code == 404
     remaining = client.get("/api/v1/projects").json()["items"]
     assert [item["id"] for item in remaining] == [p2["id"]]
+
+
+def test_api_datetimes_are_timezone_aware_utc_ending_with_z(client: TestClient) -> None:
+    csrf = _register_and_login(client, "tz@example.com", "TZ User")
+    headers = {"X-CSRF-Token": csrf}
+
+    me = client.get("/api/v1/auth/me").json()
+    assert str(me["created_at"]).endswith("Z")
+
+    project = client.post(
+        "/api/v1/projects",
+        json={"key": "UTC", "name": "UTC Project"},
+        headers=headers,
+    ).json()
+    assert str(project["created_at"]).endswith("Z")
+    assert str(project["updated_at"]).endswith("Z")
+
+    # Fetch via a fresh GET so the row is loaded back from SQLite
+    fetched_project = client.get(f"/api/v1/projects/{project['id']}").json()
+    assert str(fetched_project["created_at"]).endswith("Z")
+    assert str(fetched_project["updated_at"]).endswith("Z")
+
+    story = client.post(
+        f"/api/v1/projects/{project['id']}/stories",
+        json={"title": "UTC Story"},
+        headers=headers,
+    ).json()
+    fetched_story = client.get(f"/api/v1/stories/{story['id']}").json()
+    assert str(fetched_story["created_at"]).endswith("Z")
+    assert str(fetched_story["updated_at"]).endswith("Z")

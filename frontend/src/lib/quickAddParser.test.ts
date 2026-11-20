@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isTaskOverdue, parseUtcTimestamp } from './labels';
 import { parseQuickAdd } from './quickAddParser';
 import type { ProjectMember } from './types';
 
@@ -77,5 +78,30 @@ describe('parseQuickAdd', () => {
 
     const emptyTitle = parseQuickAdd('@alex !high', MEMBERS);
     expect(emptyTitle.ok).toBe(false);
+  });
+
+  it('compares isTaskOverdue against the local calendar date and parses UTC timestamps', () => {
+    // Fake Date whose local calendar date is 2026-11-21 even while toISOString() is still 2026-11-20 (e.g. 01:00 IST)
+    const fakeLocalNov21 = {
+      getFullYear: () => 2026,
+      getMonth: () => 10, // November (0-indexed)
+      getDate: () => 21,
+      toISOString: () => '2026-11-20T19:30:00.000Z',
+    } as unknown as Date;
+
+    expect(
+      isTaskOverdue({ due_date: '2026-11-20', status: 'todo' }, fakeLocalNov21),
+    ).toBe(true);
+    expect(
+      isTaskOverdue({ due_date: '2026-11-21', status: 'todo' }, fakeLocalNov21),
+    ).toBe(false);
+    expect(
+      isTaskOverdue({ due_date: '2026-11-20', status: 'done' }, fakeLocalNov21),
+    ).toBe(false);
+
+    const parsedZ = parseUtcTimestamp('2026-11-20T08:00:00Z');
+    const parsedNaive = parseUtcTimestamp('2026-11-20T08:00:00');
+    expect(parsedZ.getTime()).toBe(Date.UTC(2026, 10, 20, 8, 0, 0));
+    expect(parsedNaive.getTime()).toBe(Date.UTC(2026, 10, 20, 8, 0, 0));
   });
 });

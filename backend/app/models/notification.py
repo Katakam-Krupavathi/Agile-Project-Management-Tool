@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base
+from app.db.base import Base, UTCDateTime
 from app.models.user import new_uuid, utc_now
 
 
@@ -25,7 +25,7 @@ class Notification(Base):
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utc_now
+        UTCDateTime(), nullable=False, default=utc_now
     )
