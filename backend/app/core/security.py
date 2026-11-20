@@ -6,6 +6,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 _password_hasher = PasswordHasher()
+_DUMMY_PASSWORD_HASH = _password_hasher.hash("dummy-constant-time-argon2-secret")
 _SESSION_SALT = "agile-pm-session-v1"
 
 
@@ -18,6 +19,10 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return _password_hasher.verify(password_hash, plain_password)
     except (VerifyMismatchError, InvalidHashError, VerificationError):
         return False
+
+
+def verify_dummy_password(plain_password: str) -> None:
+    verify_password(plain_password, _DUMMY_PASSWORD_HASH)
 
 
 def create_session_token(user_id: str, secret_key: str, token_version: int = 0) -> str:

@@ -248,10 +248,6 @@ def test_sse_stream_closes_after_logout_revokes_session(
         asyncio.run(_run())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Unknown-user login path skips Argon2 verify",
-)
 def test_unknown_user_and_wrong_password_both_call_argon2_hasher(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -268,13 +264,17 @@ def test_unknown_user_and_wrong_password_both_call_argon2_hasher(
     )
 
     verify_calls: list[str] = []
-    original_verify = security_mod._password_hasher.verify
+    original_hasher = security_mod._password_hasher
 
-    def spy_verify(hash_val: str, password: str) -> bool:
-        verify_calls.append(password)
-        return original_verify(hash_val, password)
+    class _SpyHasher:
+        def hash(self, password: str) -> str:
+            return original_hasher.hash(password)
 
-    monkeypatch.setattr(security_mod._password_hasher, "verify", spy_verify)
+        def verify(self, hash_val: str, password: str) -> bool:
+            verify_calls.append(password)
+            return original_hasher.verify(hash_val, password)
+
+    monkeypatch.setattr(security_mod, "_password_hasher", _SpyHasher())
 
     unknown_res = client.post(
         "/api/v1/auth/login",
