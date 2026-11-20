@@ -117,3 +117,18 @@ def test_security_headers_and_request_size_limit() -> None:
         assert oversized.status_code == 413
         assert oversized.headers["content-type"].startswith("application/problem+json")
         assert oversized.json()["code"] == "PAYLOAD_TOO_LARGE"
+
+        # Streamed / chunked 5MB body without Content-Length header must also return 413
+        def _five_mb_chunks():
+            chunk = b"a" * (512 * 1024)
+            for _ in range(10):
+                yield chunk
+
+        chunked = client.post(
+            "/api/v1/auth/login",
+            content=_five_mb_chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert chunked.status_code == 413
+        assert chunked.headers["content-type"].startswith("application/problem+json")
+        assert chunked.json()["code"] == "PAYLOAD_TOO_LARGE"
