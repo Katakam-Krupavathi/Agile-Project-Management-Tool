@@ -28,6 +28,16 @@ flowchart LR
     Worker -->|"Atomic Claim / Backoff / Recovery"| DB
 ```
 
+## 🎥 Demo Video
+
+A screen recording with voice narration covering the framework, key features, and functionality:
+
+[▶ Watch the walkthrough video](https://github.com/user-attachments/assets/8a81cb35-0d12-48ac-a24d-bac7a28c641c)
+
+
+
+
+
 See [docs/architecture.md](docs/architecture.md) for layering details.
 
 ## Quick Start (Docker Compose)
