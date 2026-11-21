@@ -1,7 +1,7 @@
 import asyncio
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import FastAPI
@@ -198,7 +198,10 @@ def test_due_soon_reminder_scheduler_and_deduplication(
         headers=headers,
     ).json()["id"]
 
-    today = date(2026, 11, 20)
+    run_time = datetime.now(UTC).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(
+        days=1
+    )
+    today = run_time.date()
     tomorrow = today + timedelta(days=1)
     later = today + timedelta(days=5)
 
@@ -236,7 +239,6 @@ def test_due_soon_reminder_scheduler_and_deduplication(
     # Drain the initial task.assigned notifications first
     _drain_worker(db_session_factory)
 
-    run_time = datetime(2026, 11, 20, 10, 0, 0, tzinfo=UTC)
     with db_session_factory() as db:
         sched1 = schedule_due_soon_reminders(db, now=run_time)
         sched2 = schedule_due_soon_reminders(db, now=run_time + timedelta(minutes=15))
